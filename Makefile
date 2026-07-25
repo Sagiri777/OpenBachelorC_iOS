@@ -7,7 +7,7 @@ install-package:
 	brew install python pipx android-platform-tools jq
 else
 install-package:
-	sudo apt install pipx==1.14.1 adb jq
+	sudo apt install pipx adb jq
 endif
 
 setup: install-package
