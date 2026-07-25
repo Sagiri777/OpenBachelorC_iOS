@@ -11,7 +11,7 @@ pkg install -y jq
 
 export ANDROID_API_LEVEL=24
 
-pip install pipx
+pip install pipx==1.14.1
 pipx install poetry
 pipx ensurepath
 
