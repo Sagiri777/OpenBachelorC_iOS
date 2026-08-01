@@ -59,6 +59,7 @@ remote_local_filename_mapping = {
     "meta_ui_db (Torappu.MetaUIDisplayDB).json": "meta_ui_table.json",
     "CharMasterDB.json": "char_master_table.json",
     "special_operator_db (Torappu.SpecialOperatorDB).json": "special_operator_table.json",
+    "arkvent_db (Torappu.ArkOdcDB).json": "arkvent_table.json",
 }
 
 
