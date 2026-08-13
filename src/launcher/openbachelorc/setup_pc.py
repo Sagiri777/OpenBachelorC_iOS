@@ -23,7 +23,7 @@ def main():
 
     ak_filepath = Path(ak_filepath)
 
-    victim_dll_filepath = ak_filepath.parent / "hgsdk.dll"
+    victim_dll_filepath = ak_filepath.parent / "hgdownloadsdk.dll"
     if not victim_dll_filepath.is_file():
         print("err: victim dll not found")
         sys.exit(1)
