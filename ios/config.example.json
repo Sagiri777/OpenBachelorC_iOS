@@ -1,0 +1,42 @@
+{
+  "bundle_id": "com.hypergryph.arknights",
+  "process_name": "",
+  "connection": {
+    "mode": "jailbreak",
+    "transport": "usb",
+    "remote_address": "127.0.0.1:27042",
+    "timeout_seconds": 20
+  },
+  "launch": {
+    "spawn": false
+  },
+  "scripts": {
+    "probe": true,
+    "core": true,
+    "extra": true,
+    "trainer": false
+  },
+  "core": {
+    "no_proxy": true,
+    "proxy_url": ""
+  },
+  "direct": {
+    "no_proxy": true,
+    "proxy_url": "",
+    "capture": false,
+    "capture_output_dir": "captured",
+    "capture_max_body_bytes": 4194304,
+    "bypass_ssl": true,
+    "bypass_signatures": true
+  },
+  "extra": {
+    "pause_deploy": true,
+    "3x_speed": true,
+    "vision": true,
+    "vision_font_size": 22
+  },
+  "trainer": {
+    "dump_json": false,
+    "startup_commands": []
+  }
+}

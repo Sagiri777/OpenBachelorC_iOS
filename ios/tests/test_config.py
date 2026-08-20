@@ -1,0 +1,93 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from openbachelor_ios.config import load_config
+
+
+def test_load_example_config():
+    config = load_config(Path("config.example.json"))
+
+    assert config.bundle_id == "com.hypergryph.arknights"
+    assert config.connection.mode == "jailbreak"
+    assert config.connection.transport == "usb"
+    assert config.launch.spawn is False
+    assert config.scripts.extra is True
+    assert config.scripts.trainer is False
+    assert config.core["no_proxy"] is True
+    assert config.direct["capture"] is False
+    assert config.direct["bypass_ssl"] is True
+    assert config.direct["bypass_signatures"] is True
+
+
+def test_overrides_do_not_mutate_original():
+    config = load_config(Path("config.example.json"))
+    changed = config.with_overrides(
+        mode="gadget",
+        remote_address="10.0.0.2:27042",
+        spawn=False,
+        trainer=True,
+    )
+
+    assert config.connection.mode == "jailbreak"
+    assert changed.connection.mode == "gadget"
+    assert changed.connection.transport == "remote"
+    assert changed.launch.spawn is False
+    assert changed.scripts.trainer is True
+
+
+def test_probe_only_overrides_hook_modules():
+    config = load_config(Path("config.example.json"))
+    changed = config.with_overrides(core=False, extra=False, trainer=False)
+
+    assert changed.scripts.probe is True
+    assert changed.scripts.core is False
+    assert changed.scripts.extra is False
+    assert changed.scripts.trainer is False
+
+
+def test_invalid_startup_commands_are_rejected(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"bundle_id": "example.app", "trainer": {"startup_commands": "all"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="startup_commands"):
+        load_config(path)
+
+
+def test_direct_defaults_reuse_core_transport_without_enabling_capture(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "bundle_id": "example.app",
+                "core": {"no_proxy": False, "proxy_url": "http://10.0.0.2:8443"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.direct["no_proxy"] is False
+    assert config.direct["proxy_url"] == "http://10.0.0.2:8443"
+    assert config.direct["capture"] is False
+
+
+def test_invalid_capture_output_dir_is_rejected(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "bundle_id": "example.app",
+                "direct": {"capture_output_dir": ""},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="capture_output_dir"):
+        load_config(path)
