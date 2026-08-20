@@ -10,6 +10,9 @@ A rooted arm64 android phone.
 
 A jailed arm64 android phone (with OpenBachelorG).
 
+A jailbroken arm64 iPhone with a matching Frida server. The current iOS direct
+profile is verified on iPhone 11 / iOS 16.2 with Arknights 2.7.61 (59).
+
 MUMU 12 (with OpenBachelorG MUMU build).
 
 Mac (Apple silicon) with AVD (Android Studio) (recommended: arm64, Android 15, Google APIs Image).
@@ -17,6 +20,9 @@ Mac (Apple silicon) with AVD (Android Studio) (recommended: arm64, Android 15, G
 > FYI: For AVD users, do not use Google Play Store image, which is not readily rooted.
 
 ## How-To
+
+For iPhone setup and usage, follow [`ios/README.md`](ios/README.md). The steps
+below describe the original Android launcher.
 
 ### 0. Start Server
 
@@ -35,4 +41,3 @@ Mac (Apple silicon) with AVD (Android Studio) (recommended: arm64, Android 15, G
 ### 2. Run Client
 
 1. Run `main.cmd`.
-
