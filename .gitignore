@@ -324,3 +324,17 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python,node
+
+# Local dependency caches created during reconstruction/validation
+.npm-cache/
+.pip-cache/
+.poetry-cache/
+.poetry-config/
+
+# Local analysis inputs and captured traffic
+.DS_Store
+/captured/
+/ios/captured/
+/ios/dumps/
+/ios/config.json
+/ios/config.capture-test.json
