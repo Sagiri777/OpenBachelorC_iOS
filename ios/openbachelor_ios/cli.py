@@ -109,6 +109,8 @@ def _load_with_overrides(args: argparse.Namespace) -> AppConfig:
         trainer=False
         if getattr(args, "probe_only", False)
         else (True if getattr(args, "trainer", False) else None),
+        capture_proxy_port=getattr(args, "capture_proxy_port", None),
+        capture_host=getattr(args, "capture_host", None),
     )
 
 
@@ -124,6 +126,13 @@ def _add_connection_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _run_profile_selector(args: argparse.Namespace) -> str | None:
+    capture_proxy_requested = args.capture_proxy_port is not None or args.capture_host is not None
+    if capture_proxy_requested and (args.probe_only or args.legacy_agents):
+        raise ValueError(
+            "--capture-proxy-port/--capture-host require direct profile mode"
+        )
+    if args.capture_host is not None and args.capture_proxy_port is None:
+        raise ValueError("--capture-host requires --capture-proxy-port")
     if args.trainer and not args.legacy_agents:
         raise ValueError(
             "--trainer is incompatible with direct profile mode; "
@@ -313,6 +322,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="load only the compatibility probe; do not install gameplay hooks",
     )
     launch.add_argument("--no-build", action="store_true")
+    launch.add_argument(
+        "--capture-proxy-port",
+        type=int,
+        metavar="PORT",
+        help="forward captured traffic to a local Requable/Fiddler HTTP proxy port",
+    )
+    launch.add_argument(
+        "--capture-host",
+        metavar="IP",
+        help="Mac IPv4 address reachable from the iPhone (default: auto-detect)",
+    )
 
     patch = subparsers.add_parser(
         "patch-ipa", help="embed Frida Gadget into a decrypted IPA"
@@ -490,6 +510,12 @@ def main(argv: list[str] | None = None) -> int:
 
         config = _load_with_overrides(args)
         profile = _run_profile_selector(args) if args.command == "run" else None
+        if (
+            args.command == "run"
+            and profile is None
+            and config.direct.get("capture_upstream_proxy")
+        ):
+            raise ValueError("capture_upstream_proxy requires direct profile mode")
         device = connect_device(config)
         if args.command == "doctor":
             report = describe_device(device, config)

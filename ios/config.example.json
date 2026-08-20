@@ -26,6 +26,8 @@
     "capture": false,
     "capture_output_dir": "captured",
     "capture_max_body_bytes": 4194304,
+    "capture_upstream_proxy": "",
+    "capture_bridge_host": "",
     "bypass_ssl": true,
     "bypass_signatures": true
   },

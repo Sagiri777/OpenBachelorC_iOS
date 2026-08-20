@@ -10,6 +10,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 
 from .capture import CaptureWriter
+from .capture_proxy import CaptureProxyBridge, discover_bridge_host
 from .compiler import BUILD_DIR, PROJECT_ROOT, compile_scripts
 from .config import AppConfig
 from .device import acquire_target
@@ -33,6 +34,12 @@ TRAINER_COMMANDS = (
     "cloner_assist",
     "allow_dup_char",
 )
+
+_DIRECT_HOST_KEYS = {
+    "capture_bridge_host",
+    "capture_output_dir",
+    "capture_upstream_proxy",
+}
 
 
 def _message_handler(name: str, capture_writer: CaptureWriter | None = None):
@@ -70,7 +77,7 @@ def _post_direct_init(
     script: Any, profile: DirectProfile, values: dict[str, Any]
 ) -> None:
     agent_config = {
-        key: value for key, value in values.items() if key != "capture_output_dir"
+        key: value for key, value in values.items() if key not in _DIRECT_HOST_KEYS
     }
     script.post({"type": "init", "profile": profile.data, "config": agent_config})
 
@@ -112,6 +119,20 @@ def _capture_writer(config: AppConfig) -> CaptureWriter:
         output_dir,
         enabled=bool(config.direct.get("capture", False)),
         log=lambda summary: print(f"[direct] {summary}", flush=True),
+    )
+
+
+def _capture_proxy_bridge(config: AppConfig) -> CaptureProxyBridge | None:
+    upstream_proxy = str(config.direct.get("capture_upstream_proxy", "")).strip()
+    if not upstream_proxy:
+        return None
+    bridge_host = discover_bridge_host(
+        str(config.direct.get("capture_bridge_host", ""))
+    )
+    return CaptureProxyBridge(
+        upstream_proxy,
+        bridge_host,
+        log=lambda message: print(f"[capture-proxy] {message}", flush=True),
     )
 
 
@@ -178,9 +199,37 @@ def run(
         )
 
     capture_writer = _capture_writer(config) if direct_profile is not None else None
-    target = acquire_target(device, config)
-    print(f"target: {target.name} (pid={target.pid})", flush=True)
-    session = device.attach(target.pid)
+    capture_proxy_bridge = (
+        _capture_proxy_bridge(config) if direct_profile is not None else None
+    )
+    direct_settings = dict(config.direct)
+    try:
+        if capture_proxy_bridge is not None:
+            capture_proxy_bridge.start()
+            direct_settings.update(
+                capture=True,
+                no_proxy=False,
+                proxy_url=capture_proxy_bridge.agent_proxy_url,
+                proxy_encode_scheme=True,
+                proxy_include_passthrough=True,
+            )
+            print(
+                "capture proxy active: "
+                f"iPhone -> {capture_proxy_bridge.bridge_host}:"
+                f"{capture_proxy_bridge.port} -> "
+                f"{capture_proxy_bridge.upstream_host}:"
+                f"{capture_proxy_bridge.upstream_port}",
+                flush=True,
+            )
+        target = acquire_target(device, config)
+        print(f"target: {target.name} (pid={target.pid})", flush=True)
+        session = device.attach(target.pid)
+    except BaseException:
+        if capture_writer is not None:
+            capture_writer.close()
+        if capture_proxy_bridge is not None:
+            capture_proxy_bridge.close()
+        raise
     detached = Event()
     session.on("detached", _session_detached_handler(detached))
     loaded: dict[str, Any] = {}
@@ -189,7 +238,7 @@ def run(
         settings = {
             "probe": {},
             "core": config.core,
-            "direct": config.direct,
+            "direct": direct_settings,
             "extra": config.extra,
             "trainer": config.trainer,
         }
@@ -240,6 +289,10 @@ def run(
                 capture_writer.close()
         finally:
             try:
-                session.detach()
-            except Exception:
-                pass
+                if capture_proxy_bridge is not None:
+                    capture_proxy_bridge.close()
+            finally:
+                try:
+                    session.detach()
+                except Exception:
+                    pass

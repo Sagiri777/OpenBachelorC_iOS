@@ -17,6 +17,8 @@ def test_load_example_config():
     assert config.scripts.trainer is False
     assert config.core["no_proxy"] is True
     assert config.direct["capture"] is False
+    assert config.direct["capture_upstream_proxy"] == ""
+    assert config.direct["capture_bridge_host"] == ""
     assert config.direct["bypass_ssl"] is True
     assert config.direct["bypass_signatures"] is True
 
@@ -90,4 +92,34 @@ def test_invalid_capture_output_dir_is_rejected(tmp_path):
     )
 
     with pytest.raises(ValueError, match="capture_output_dir"):
+        load_config(path)
+
+
+def test_capture_proxy_override_enables_capture_without_mutating_original():
+    config = load_config(Path("config.example.json"))
+
+    changed = config.with_overrides(
+        capture_proxy_port=8888, capture_host="192.168.1.20"
+    )
+
+    assert config.direct["capture"] is False
+    assert config.direct["capture_upstream_proxy"] == ""
+    assert changed.direct["capture"] is True
+    assert changed.direct["capture_upstream_proxy"] == "http://127.0.0.1:8888"
+    assert changed.direct["capture_bridge_host"] == "192.168.1.20"
+
+
+def test_invalid_capture_proxy_config_is_rejected(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "bundle_id": "example.app",
+                "direct": {"capture_upstream_proxy": "https://127.0.0.1:8888"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="capture_upstream_proxy"):
         load_config(path)

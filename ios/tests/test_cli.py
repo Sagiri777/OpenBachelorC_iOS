@@ -30,6 +30,34 @@ def test_trainer_is_rejected_in_direct_profile_mode():
         cli._run_profile_selector(args)
 
 
+def test_capture_proxy_cli_enables_capture_and_local_upstream():
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            "config.example.json",
+            "--capture-proxy-port",
+            "8888",
+            "--capture-host",
+            "192.168.1.20",
+        ]
+    )
+
+    config = cli._load_with_overrides(args)
+
+    assert cli._run_profile_selector(args) == "auto"
+    assert config.direct["capture"] is True
+    assert config.direct["capture_upstream_proxy"] == "http://127.0.0.1:8888"
+    assert config.direct["capture_bridge_host"] == "192.168.1.20"
+
+
+def test_capture_host_requires_proxy_port():
+    args = cli.build_parser().parse_args(["run", "--capture-host", "192.168.1.20"])
+
+    with pytest.raises(ValueError, match="requires --capture-proxy-port"):
+        cli._run_profile_selector(args)
+
+
 def test_run_reports_locked_iphone_without_traceback(monkeypatch, capsys):
     error = frida.NotSupportedError(
         "unable to launch iOS app via FBS: The operation couldn't be completed. "

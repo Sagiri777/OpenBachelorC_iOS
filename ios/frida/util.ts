@@ -99,12 +99,23 @@ export function rewriteUrl(url: string, conf: ScriptConfig): string {
     }
 
     const hostStart = url.indexOf("://") + 3;
-    const pathStart = url.indexOf("/", hostStart);
-    const host = pathStart === -1 ? url.substring(hostStart) : url.substring(hostStart, pathStart);
-    if (PASSTHROUGH_HOST_SUFFIXES.some(suffix => host === suffix || host.endsWith(`.${suffix}`))) {
+    const scheme = url.substring(0, hostStart - 3).toLowerCase();
+    const suffixStarts = ["/", "?", "#"]
+        .map(marker => url.indexOf(marker, hostStart))
+        .filter(index => index !== -1);
+    const pathStart = suffixStarts.length === 0 ? url.length : Math.min(...suffixStarts);
+    const host = url.substring(hostStart, pathStart);
+    if (
+        !conf.bool("proxy_include_passthrough", false)
+        && PASSTHROUGH_HOST_SUFFIXES.some(suffix => host === suffix || host.endsWith(`.${suffix}`))
+    ) {
         return url;
     }
-    const path = pathStart === -1 ? "/" : url.substring(pathStart);
+    const suffix = url.substring(pathStart);
+    const path = !suffix ? "/" : suffix.startsWith("/") ? suffix : `/${suffix}`;
+    if (conf.bool("proxy_encode_scheme", false)) {
+        return `${proxyUrl}/__openbachelor_proxy__/${scheme}/${host}${path}`;
+    }
     return `${proxyUrl}/${host}${path}`;
 }
 

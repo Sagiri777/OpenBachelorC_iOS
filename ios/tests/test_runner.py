@@ -122,7 +122,7 @@ def test_direct_run_loads_only_probe_and_direct_and_posts_init(monkeypatch, tmp_
     agent_config = {
         key: value
         for key, value in config.direct.items()
-        if key != "capture_output_dir"
+        if key not in runner._DIRECT_HOST_KEYS
     }
     assert direct.messages == [
         {"type": "init", "profile": profile_data, "config": agent_config}
@@ -137,6 +137,81 @@ def test_direct_run_loads_only_probe_and_direct_and_posts_init(monkeypatch, tmp_
     assert writer.output_dir == runner.PROJECT_ROOT / "captured"
     assert writer.enabled is False
     assert writer.closed is True
+
+
+def test_direct_run_starts_capture_proxy_and_posts_bridge_settings(
+    monkeypatch, tmp_path
+):
+    lifecycle = []
+    config = load_config(Path("config.example.json")).with_overrides(
+        capture_proxy_port=8888,
+        capture_host="192.168.1.20",
+    )
+    profile_data = {
+        "schema": 1,
+        "id": "arknights-2.7.61-59",
+        "bundle_id": config.bundle_id,
+        "version": "2.7.61",
+        "build": "59",
+    }
+    profile = DirectProfile(tmp_path / "profile.json", profile_data)
+    outputs = {}
+    for name in ("probe", "direct"):
+        path = tmp_path / f"{name}.js"
+        path.write_text(f"// {name}", encoding="utf-8")
+        outputs[name] = path
+
+    class FakeBridge:
+        instances = []
+
+        def __init__(self, upstream_proxy, bridge_host, *, log):
+            self.upstream_proxy = upstream_proxy
+            self.upstream_host = "127.0.0.1"
+            self.upstream_port = 8888
+            self.bridge_host = bridge_host
+            self.port = 43123
+            self.agent_proxy_url = "http://192.168.1.20:43123/session-token"
+            self.started = False
+            self.closed = False
+            self.instances.append(self)
+
+        def start(self):
+            self.started = True
+            lifecycle.append("bridge-start")
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(runner, "select_profile", lambda *_args, **_kwargs: profile)
+    monkeypatch.setattr(
+        runner, "compile_scripts", lambda names: {name: outputs[name] for name in names}
+    )
+    monkeypatch.setattr(runner, "CaptureProxyBridge", FakeBridge)
+    monkeypatch.setattr(runner, "discover_bridge_host", lambda host: host)
+    monkeypatch.setattr(runner, "_wait_for_session", lambda _event: None)
+    acquire_target = runner.acquire_target
+
+    def tracked_acquire_target(device, app_config):
+        lifecycle.append("target-acquire")
+        return acquire_target(device, app_config)
+
+    monkeypatch.setattr(runner, "acquire_target", tracked_acquire_target)
+    device = FakeDevice()
+
+    runner.run(device, config, profile="auto")
+
+    bridge = FakeBridge.instances[0]
+    assert lifecycle[:2] == ["bridge-start", "target-acquire"]
+    assert bridge.started is True
+    assert bridge.closed is True
+    direct_config = device.session.scripts["direct"].messages[0]["config"]
+    assert direct_config["capture"] is True
+    assert direct_config["no_proxy"] is False
+    assert direct_config["proxy_encode_scheme"] is True
+    assert direct_config["proxy_include_passthrough"] is True
+    assert direct_config["proxy_url"] == bridge.agent_proxy_url
+    assert "capture_upstream_proxy" not in direct_config
+    assert "capture_bridge_host" not in direct_config
 
 
 def test_session_detached_handler_releases_wait(capsys):

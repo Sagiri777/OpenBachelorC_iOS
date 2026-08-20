@@ -647,6 +647,8 @@ uv run --locked openbachelor-ios run \
     "capture": false,
     "capture_output_dir": "captured",
     "capture_max_body_bytes": 4194304,
+    "capture_upstream_proxy": "",
+    "capture_bridge_host": "",
     "bypass_ssl": true,
     "bypass_signatures": true
   }
@@ -711,6 +713,57 @@ captured/
 
 记录中的 `transport` 可区分 `UnityWebRequest` 与 `BestHTTP`。BestHTTP 记录还包含
 `source`，用于判断请求在何处建立或响应在何处整理。
+
+### 在 Requable / Fiddler 中实时查看
+
+先启动 Requable、Fiddler 或其它支持标准 HTTP 代理的工具，确认它在本机
+`127.0.0.1` 的某个端口监听。假设端口是 `8888`：
+
+```bash
+uv run --locked openbachelor-ios run \
+  --mode jailbreak --attach \
+  --capture-proxy-port 8888
+```
+
+该参数会自动启用 direct capture、启动一个仅在本次 session 存活的桥接服务，并将
+实际游戏请求依次送入查看工具后再访问目标服务器。它不是事后重放，因此写请求不会被
+重复发送。终端会显示实际链路，例如：
+
+```text
+capture proxy active: iPhone -> 192.168.1.20:43123 -> 127.0.0.1:8888
+```
+
+桥接入口使用随机端口和会话令牌，退出 `run` 后自动关闭；JSONL 与 body sidecar 仍按
+`capture_output_dir` 写入。若自动选择的 Mac 地址不能从 iPhone 访问，可显式指定：
+
+```bash
+uv run --locked openbachelor-ios run \
+  --mode jailbreak --attach \
+  --capture-proxy-port 8888 \
+  --capture-host 192.168.1.20
+```
+
+需要长期保存在配置中时，可使用等价字段：
+
+```json
+{
+  "direct": {
+    "capture_upstream_proxy": "http://127.0.0.1:8888",
+    "capture_bridge_host": "192.168.1.20"
+  }
+}
+```
+
+使用时注意：
+
+- 必须先启动查看工具；端口未监听时 `run` 会在启动目标流量前报错。
+- iPhone 必须能访问终端显示的 Mac 地址和随机桥接端口，macOS 防火墙也需放行。
+- 查看 HTTPS 明文时，需要在 Requable/Fiddler 中开启 HTTPS 解密。TLS 在宿主桥接侧
+  建立，iPhone 不需要额外安装查看工具的 CA 证书。
+- iPhone 到桥接入口是明文 HTTP URL 重写；Gadget 包若受 ATS 限制，需使用
+  `patch-ipa --allow-http`，或为测试包配置等价的 ATS 例外。
+- `--capture-proxy-port` 仅支持 direct profile 模式，不能与 `--probe-only` 或
+  `--legacy-agents` 一起使用。
 
 ### 登录后的 `syncData`
 
