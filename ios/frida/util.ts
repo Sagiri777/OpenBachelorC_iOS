@@ -97,6 +97,14 @@ export function rewriteUrl(url: string, conf: ScriptConfig): string {
     if (!proxyUrl || (!url.startsWith("https://") && !url.startsWith("http://"))) {
         return url;
     }
+    if (
+        url === proxyUrl
+        || url.startsWith(`${proxyUrl}/`)
+        || url.startsWith(`${proxyUrl}?`)
+        || url.startsWith(`${proxyUrl}#`)
+    ) {
+        return url;
+    }
 
     const hostStart = url.indexOf("://") + 3;
     const scheme = url.substring(0, hostStart - 3).toLowerCase();

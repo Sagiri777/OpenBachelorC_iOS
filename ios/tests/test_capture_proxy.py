@@ -15,10 +15,16 @@ class _ViewerProxy(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        self._handle(201)
+
+    def do_GET(self):
+        self._handle(200)
+
+    def _handle(self, status):
         size = int(self.headers.get("Content-Length", "0"))
         type(self).requests.append((self.path, dict(self.headers), self.rfile.read(size)))
         response = b"viewer response"
-        self.send_response(201)
+        self.send_response(status)
         self.send_header("X-Viewer", "yes")
         self.send_header("Content-Length", str(len(response)))
         self.end_headers()
@@ -73,46 +79,9 @@ def test_bridge_forwards_http_request_through_standard_proxy():
         viewer_thread.join(timeout=2)
 
 
-def test_bridge_uses_connect_tunnel_for_https(monkeypatch):
+def test_bridge_forwards_https_post_as_visible_absolute_request():
+    _ViewerProxy.requests = []
     viewer, viewer_thread = _start_server(_ViewerProxy)
-    calls = []
-
-    class FakeResponse:
-        status = 200
-        reason = "OK"
-
-        @staticmethod
-        def read():
-            return b"secure response"
-
-        @staticmethod
-        def getheaders():
-            return [("Content-Type", "application/json")]
-
-    class FakeHttpsConnection:
-        def __init__(self, host, port, **kwargs):
-            calls.append(("connect", host, port, kwargs))
-
-        def set_tunnel(self, host, port):
-            calls.append(("tunnel", host, port))
-
-        def putrequest(self, method, target, **kwargs):
-            calls.append(("request", method, target, kwargs))
-
-        def putheader(self, name, value):
-            calls.append(("header", name, value))
-
-        def endheaders(self, body):
-            calls.append(("body", body))
-
-        @staticmethod
-        def getresponse():
-            return FakeResponse()
-
-        def close(self):
-            calls.append(("close",))
-
-    monkeypatch.setattr(capture_proxy.http.client, "HTTPSConnection", FakeHttpsConnection)
     bridge = CaptureProxyBridge(
         f"http://127.0.0.1:{viewer.server_port}",
         "127.0.0.1",
@@ -122,20 +91,22 @@ def test_bridge_uses_connect_tunnel_for_https(monkeypatch):
         bridge.start()
         connection = http.client.HTTPConnection("127.0.0.1", bridge.port)
         path = f"/test-token/{PROXY_PATH_MARKER}/https/secure.test/private?q=2"
-        connection.request("GET", path)
+        connection.request("POST", path, body=b"sync payload")
         response = connection.getresponse()
 
-        assert response.status == 200
-        assert response.read() == b"secure response"
-        assert ("tunnel", "secure.test", 443) in calls
-        assert any(call[:3] == ("request", "GET", "/private?q=2") for call in calls)
+        assert response.status == 201
+        assert response.getheader("X-Viewer") == "yes"
+        assert response.read() == b"viewer response"
+        assert len(_ViewerProxy.requests) == 1
+        target, headers, body = _ViewerProxy.requests[0]
+        assert target == "https://secure.test/private?q=2"
+        assert headers["Host"] == "secure.test"
+        assert body == b"sync payload"
     finally:
         bridge.close()
         viewer.shutdown()
         viewer.server_close()
         viewer_thread.join(timeout=2)
-
-
 @pytest.mark.parametrize(
     "value",
     ["127.0.0.1:8888", "https://127.0.0.1:8888", "http://127.0.0.1"],

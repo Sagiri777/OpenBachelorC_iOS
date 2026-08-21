@@ -69,6 +69,7 @@ let getUrl: any = null;
 let getResponseCode: any = null;
 let getDownloadData: any = null;
 let uriGetAbsoluteUri: any = null;
+let bestHttpDumpHeaders: any = null;
 let nextRequestId = 1;
 let installed = false;
 
@@ -247,6 +248,40 @@ function rewriteManagedUrl(value: NativePointer, source: string): { pointer: Nat
     return { pointer: allocateManagedString(rewritten), url: rewritten };
 }
 
+function urlOrigin(value: string): string {
+    const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/.exec(value);
+    return match === null ? "" : `${match[1].toLowerCase()}://${match[2].toLowerCase()}`;
+}
+
+function urlHost(value: string): string {
+    const origin = urlOrigin(value);
+    if (!origin) return "";
+    let authority = origin.slice(origin.indexOf("://") + 3);
+    const userInfo = authority.lastIndexOf("@");
+    if (userInfo !== -1) authority = authority.slice(userInfo + 1);
+    if (authority.startsWith("[")) {
+        const end = authority.indexOf("]");
+        return end === -1 ? "" : authority.slice(1, end);
+    }
+    const port = authority.indexOf(":");
+    return port === -1 ? authority : authority.slice(0, port);
+}
+
+function rewriteBestHttpSystemUri(value: NativePointer): NativePointer {
+    const original = readManagedString(value, 64 * 1024);
+    const host = urlHost(original);
+    const proxyOrigin = urlOrigin(conf.get<string>("proxy_url", ""));
+    if (
+        host === "localhost"
+        || host === "127.0.0.1"
+        || host === "::1"
+        || (!!proxyOrigin && urlOrigin(original) === proxyOrigin)
+    ) {
+        return value;
+    }
+    return rewriteManagedUrl(value, "System.Uri.ctor").pointer;
+}
+
 function safeAttach(name: string, callbacks: InvocationListenerCallbacks, hooks: string[], errors: string[]): void {
     try {
         Interceptor.attach(address(name), callbacks);
@@ -361,8 +396,29 @@ function bestHttpMethod(pointer: NativePointer): string {
     }
 }
 
+function refreshBestHttpHeaders(state: BestHttpRequestState): void {
+    if (bestHttpDumpHeaders === null) return;
+    try {
+        const value = bestHttpDumpHeaders(state.pointer, NULL) as NativePointer;
+        if (value.isNull()) return;
+        const raw = readManagedString(value, 1024 * 1024);
+        const headers: Record<string, string> = {};
+        for (const line of raw.split(/\r?\n/)) {
+            const separator = line.indexOf(":");
+            if (separator <= 0) continue;
+            const name = line.slice(0, separator).trim();
+            const headerValue = line.slice(separator + 1).trim();
+            if (name) headers[name] = headerValue;
+        }
+        state.headers = headers;
+    } catch (error) {
+        emit({ event: "besthttp-warning", stage: "headers", error: String(error) });
+    }
+}
+
 function emitBestHttpRequest(state: BestHttpRequestState, source: string): void {
     if (!captureEnabled || state.requestId !== undefined) return;
+    refreshBestHttpHeaders(state);
     state.requestId = `ios-${Date.now()}-${nextRequestId++}`;
     const body = state.body ?? bestHttpRequestBody(state.pointer);
     emit({
@@ -458,6 +514,7 @@ function installBestHttpHooks(hooks: string[], errors: string[]): void {
         "networkerPostWithBestHttp",
         "networkerGenerateHttpPostRequest",
         "networkerProcessBestHttpResponse",
+        ...(!conf.bool("no_proxy", true) ? ["systemUriCtorString"] : []),
     ];
     const requiredLayouts = [
         "bestRequestUri",
@@ -480,6 +537,20 @@ function installBestHttpHooks(hooks: string[], errors: string[]): void {
             emit({ event: "besthttp-warning", stage: "uri-getter", error: String(error) });
         }
     }
+    if (hasOffset("systemUriCtorString")) {
+        safeAttach("systemUriCtorString", {
+            onEnter(args) {
+                args[1] = rewriteBestHttpSystemUri(args[1]);
+            },
+        }, hooks, errors);
+    }
+    if (hasOffset("bestHttpRequestDumpHeaders")) {
+        try {
+            bestHttpDumpHeaders = new NativeFunction(address("bestHttpRequestDumpHeaders"), "pointer", ["pointer", "pointer"]);
+        } catch (error) {
+            emit({ event: "besthttp-warning", stage: "headers-getter", error: String(error) });
+        }
+    }
 
     safeAttach("networkerPostWithBestHttp", {
         onEnter(args) {
@@ -500,21 +571,24 @@ function installBestHttpHooks(hooks: string[], errors: string[]): void {
 
     safeAttach("networkerGenerateHttpPostRequest", {
         onEnter(this: InvocationContext & { url?: string; body?: BodyData; requestSlot?: NativePointer }, args) {
-            if (!captureEnabled) return;
             try {
                 const original = readManagedString(args[1], 64 * 1024);
                 const rewritten = rewriteUrl(original, conf);
-                if (rewritten !== original) args[1] = allocateManagedString(rewritten);
-                this.url = rewritten;
-                this.body = bodyFromString(readManagedString(args[2], 64 * 1024 * 1024));
-                this.requestSlot = args[6];
+                if (rewritten !== original) {
+                    args[1] = allocateManagedString(rewritten);
+                }
+                if (captureEnabled) {
+                    this.url = rewritten;
+                    this.body = bodyFromString(readManagedString(args[2], 64 * 1024 * 1024));
+                    this.requestSlot = args[6];
+                }
             } catch (error) {
                 emit({ event: "besthttp-warning", stage: "request", error: String(error) });
             }
         },
         onLeave(this: InvocationContext & { url?: string; body?: BodyData; requestSlot?: NativePointer }) {
-            if (!captureEnabled || this.requestSlot === undefined) return;
             try {
+                if (!captureEnabled || this.requestSlot === undefined) return;
                 const request = this.requestSlot.readPointer();
                 if (request.isNull()) return;
                 const state = bestHttpRequestState(request);
@@ -523,7 +597,6 @@ function installBestHttpHooks(hooks: string[], errors: string[]): void {
                 if (this.body !== undefined) state.body = this.body;
                 const rawBody = bestHttpRequestBody(request);
                 if (rawBody.size > 0) state.body = rawBody;
-                emitBestHttpRequest(state, "Networker._GenerateHttpPostRequest");
             } catch (error) {
                 emit({ event: "besthttp-warning", stage: "request-leave", error: String(error) });
             }

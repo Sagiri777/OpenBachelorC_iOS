@@ -161,9 +161,19 @@ METHOD_SPECS: tuple[MethodSpec, ...] = (
         "BestHTTP_HTTPRequest_o* __this, const MethodInfo* method",
     ),
     MethodSpec(
+        "bestHttpRequestDumpHeaders",
+        "BestHTTP.HTTPRequest$$DumpHeaders",
+        "BestHTTP_HTTPRequest_o* __this, const MethodInfo* method",
+    ),
+    MethodSpec(
         "bestHttpManagerSendRequest",
         "BestHTTP.HTTPManager$$SendRequest",
         "BestHTTP_HTTPRequest_o* request, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "systemUriCtorString",
+        "System.Uri$$.ctor",
+        "System_String_o* uriString, const MethodInfo* method",
     ),
     MethodSpec(
         "systemUriGetAbsoluteUri",

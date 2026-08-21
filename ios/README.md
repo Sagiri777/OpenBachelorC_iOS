@@ -733,6 +733,14 @@ uv run --locked openbachelor-ios run \
 capture proxy active: iPhone -> 192.168.1.20:43123 -> 127.0.0.1:8888
 ```
 
+桥接会向查看工具发送原始 absolute URL，因此列表中直接显示
+`https://ak-gs-gf.hypergryph.com/account/syncData`，可按原域名或路径搜索。
+
+UnityWebRequest 会在请求构造入口改写 URL；BestHTTP 则会在实际 `System.Uri` 构造时改写
+外部目标，并排除 `localhost`、loopback 和本次桥接自身的 origin。终端出现
+`"source":"System.Uri.ctor"` 才表示 BestHTTP 真正进入桥接，而不只是捕获记录中的 URL
+发生了变化。
+
 桥接入口使用随机端口和会话令牌，退出 `run` 后自动关闭；JSONL 与 body sidecar 仍按
 `capture_output_dir` 写入。若自动选择的 Mac 地址不能从 iPhone 访问，可显式指定：
 
@@ -758,8 +766,9 @@ uv run --locked openbachelor-ios run \
 
 - 必须先启动查看工具；端口未监听时 `run` 会在启动目标流量前报错。
 - iPhone 必须能访问终端显示的 Mac 地址和随机桥接端口，macOS 防火墙也需放行。
-- 查看 HTTPS 明文时，需要在 Requable/Fiddler 中开启 HTTPS 解密。TLS 在宿主桥接侧
-  建立，iPhone 不需要额外安装查看工具的 CA 证书。
+- 桥接会把 HTTP 和 HTTPS 请求以原始 absolute URL 提交给查看工具，再由查看工具连接
+  目标服务器。请求不会被隐藏在 `CONNECT` 隧道中，Reqable 列表也不会出现本机桥接
+  URL；iPhone 不需要额外安装查看工具的 CA 证书。
 - iPhone 到桥接入口是明文 HTTP URL 重写；Gadget 包若受 ATS 限制，需使用
   `patch-ipa --allow-http`，或为测试包配置等价的 ATS 例外。
 - `--capture-proxy-port` 仅支持 direct profile 模式，不能与 `--probe-only` 或

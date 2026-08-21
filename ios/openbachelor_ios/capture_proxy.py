@@ -5,7 +5,6 @@ import http.server
 import ipaddress
 import secrets
 import socket
-import ssl
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -119,21 +118,44 @@ def _target_authority(parsed: SplitResult) -> str:
     return f"{host}:{parsed.port}" if parsed.port is not None else host
 
 
-def _tls_context() -> ssl.SSLContext:
-    # The inspection proxy presents its own per-host certificate after CONNECT.
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    return context
-
-
 class _BridgeServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], bridge: "CaptureProxyBridge") -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        bridge: "CaptureProxyBridge",
+        handler: type[http.server.BaseHTTPRequestHandler],
+    ) -> None:
         self.bridge = bridge
-        super().__init__(address, _BridgeHandler)
+        super().__init__(address, handler)
+
+
+def _decode_target_url(path: str, prefix: str) -> str:
+    if not path.startswith(prefix):
+        raise ValueError("invalid capture bridge path")
+    encoded = path[len(prefix) :]
+    scheme, separator, remainder = encoded.partition("/")
+    authority, authority_separator, path_and_query = remainder.partition("/")
+    if separator != "/" or scheme not in {"http", "https"} or not authority:
+        raise ValueError("invalid capture bridge target")
+    if authority_separator != "/":
+        path_and_query = ""
+    target_url = f"{scheme}://{authority}/{path_and_query}"
+    parsed = urlsplit(target_url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"invalid target port: {exc}") from exc
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        raise ValueError("invalid capture bridge target authority")
+    return target_url
 
 
 class _BridgeHandler(http.server.BaseHTTPRequestHandler):
@@ -145,27 +167,7 @@ class _BridgeHandler(http.server.BaseHTTPRequestHandler):
 
     def _target_url(self) -> str:
         prefix = f"/{self.server.bridge.token}/{PROXY_PATH_MARKER}/"
-        if not self.path.startswith(prefix):
-            raise ValueError("invalid capture bridge path")
-        encoded = self.path[len(prefix) :]
-        scheme, separator, remainder = encoded.partition("/")
-        authority, authority_separator, path_and_query = remainder.partition("/")
-        if separator != "/" or authority_separator != "/" or scheme not in {"http", "https"}:
-            raise ValueError("invalid capture bridge target")
-        target_url = f"{scheme}://{authority}/{path_and_query}"
-        parsed = urlsplit(target_url)
-        try:
-            port = parsed.port
-        except ValueError as exc:
-            raise ValueError(f"invalid target port: {exc}") from exc
-        if (
-            not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or (port is not None and not 1 <= port <= 65535)
-        ):
-            raise ValueError("invalid capture bridge target authority")
-        return target_url
+        return _decode_target_url(self.path, prefix)
 
     def _read_chunked_body(self) -> bytes:
         body = bytearray()
@@ -218,25 +220,15 @@ class _BridgeHandler(http.server.BaseHTTPRequestHandler):
         bridge = self.server.bridge
         parsed = urlsplit(target_url)
         assert parsed.hostname is not None
-        if parsed.scheme == "https":
-            target_port = parsed.port or 443
-            connection: http.client.HTTPConnection = http.client.HTTPSConnection(
-                bridge.upstream_host,
-                bridge.upstream_port,
-                timeout=bridge.timeout,
-                context=_tls_context(),
-            )
-            connection.set_tunnel(parsed.hostname, target_port)
-            request_target = parsed.path or "/"
-            if parsed.query:
-                request_target += f"?{parsed.query}"
-        else:
-            connection = http.client.HTTPConnection(
-                bridge.upstream_host,
-                bridge.upstream_port,
-                timeout=bridge.timeout,
-            )
-            request_target = urlunsplit(parsed._replace(fragment=""))
+        connection = http.client.HTTPConnection(
+            bridge.upstream_host,
+            bridge.upstream_port,
+            timeout=bridge.timeout,
+        )
+        # The iPhone-side bridge has already exposed the request as HTTP. Forward the
+        # original absolute URL to the viewer so Reqable displays the real scheme, host,
+        # and path while establishing target TLS on the Mac side.
+        request_target = urlunsplit(parsed._replace(fragment=""))
 
         skipped = _connection_header_names(self.headers) | {"host", "content-length"}
         try:
@@ -287,7 +279,7 @@ class _BridgeHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             status, reason, headers, response_body = self._forward(method, target_url, body)
-        except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+        except (OSError, http.client.HTTPException) as exc:
             target = urlsplit(target_url)
             self.server.bridge.log(
                 f"capture proxy upstream error for {target.scheme}://{target.netloc}: {exc}"
@@ -368,7 +360,7 @@ class CaptureProxyBridge:
                 f"{self.upstream_host}:{self.upstream_port}"
             ) from exc
 
-        server = _BridgeServer((self.bridge_host, 0), self)
+        server = _BridgeServer((self.bridge_host, 0), self, _BridgeHandler)
         thread = threading.Thread(
             target=server.serve_forever,
             name="openbachelor-ios-capture-proxy",

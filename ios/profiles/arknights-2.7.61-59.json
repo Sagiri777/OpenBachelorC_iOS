@@ -43,7 +43,9 @@
     "networkerGenerateHttpPostRequest": "0x6e75e08",
     "networkerProcessBestHttpResponse": "0x6e766e8",
     "bestHttpRequestSend": "0x6cad580",
+    "bestHttpRequestDumpHeaders": "0x6cad360",
     "bestHttpManagerSendRequest": "0x6ca5004",
+    "systemUriCtorString": "0x6970a04",
     "systemUriGetAbsoluteUri": "0x6972d90"
   },
   "prologues": {
@@ -70,7 +72,9 @@
     "networkerGenerateHttpPostRequest": "ffc302d1fc6f05a9",
     "networkerProcessBestHttpResponse": "ffc301d1f85f03a9",
     "bestHttpRequestSend": "f657bda9f44f01a9",
+    "bestHttpRequestDumpHeaders": "ff8301d1f85f02a9",
     "bestHttpManagerSendRequest": "ff8301d1f65703a9",
+    "systemUriCtorString": "f44fbea9fd7b01a9",
     "systemUriGetAbsoluteUri": "f657bda9f44f01a9"
   },
   "layout": {
