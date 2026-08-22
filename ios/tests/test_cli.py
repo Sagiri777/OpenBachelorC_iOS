@@ -23,11 +23,11 @@ def test_run_accepts_explicit_profile_or_legacy_agents():
     assert cli._run_profile_selector(legacy) is None
 
 
-def test_trainer_is_rejected_in_direct_profile_mode():
+def test_trainer_enables_direct_profile_mode():
     args = cli.build_parser().parse_args(["run", "--trainer"])
 
-    with pytest.raises(ValueError, match="incompatible with direct profile mode"):
-        cli._run_profile_selector(args)
+    assert cli._run_profile_selector(args) == "auto"
+    assert cli._load_with_overrides(args).scripts.trainer is True
 
 
 def test_capture_proxy_cli_enables_capture_and_local_upstream():
@@ -90,6 +90,14 @@ def test_frida_server_error_includes_recovery_hint():
 
     assert "frida-server 17.9.1" in message
     assert "USB" in message
+
+
+def test_frida_timeout_error_includes_foreground_hint():
+    message = cli._frida_error_message(frida.TimedOutError("timeout was reached"))
+
+    assert "unlocked" in message
+    assert "foreground" in message
+    assert "frida-server 17.9.1" in message
 
 
 def test_profile_generate_is_local_and_forwards_generator_options(
@@ -164,7 +172,10 @@ def test_profile_generate_is_local_and_forwards_generator_options(
     assert calls["generate"][1]["allow_layout_fallback"] is True
     assert calls["write"] == (output, generated.data, True)
     assert "generated profile:" in captured.out
-    assert f"hooks: {len(cli.METHOD_SPECS)}/{len(cli.METHOD_SPECS)}" in captured.out
+    assert (
+        f"hooks: {len(cli.METHOD_SPECS)}/{len(cli.METHOD_SPECS)} required, "
+        "0 optional"
+    ) in captured.out
     assert "warning: metadata identity is omitted" in captured.err
 
 

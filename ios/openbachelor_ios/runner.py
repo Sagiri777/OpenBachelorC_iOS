@@ -17,6 +17,10 @@ from .device import acquire_target
 from .profiles import DirectProfile, select_profile
 
 TRAINER_COMMANDS = (
+    "unlock_fps",
+    "battle_speed_16x",
+    "tas_pause",
+    "tas_step",
     "zero_cost",
     "zero_deploy_cnt",
     "deploy_everywhere",
@@ -35,11 +39,22 @@ TRAINER_COMMANDS = (
     "allow_dup_char",
 )
 
+TRAINER_ACTION_COMMANDS = {"tas_step"}
+
 _DIRECT_HOST_KEYS = {
     "capture_bridge_host",
     "capture_har",
     "capture_output_dir",
     "capture_upstream_proxy",
+}
+
+_DEFAULT_EXTRA_SETTINGS = {
+    "pause_deploy": True,
+    "3x_speed": True,
+    "vision": True,
+    "vision_font_size": 22,
+    "battle_timeline": True,
+    "battle_timeline_interval_ms": 200,
 }
 
 
@@ -174,7 +189,11 @@ def _trainer_cli(script: Any) -> None:
             continue
 
         prefix = "enable:" if enabled else "disable:"
-        commands = TRAINER_COMMANDS if parts == ["all"] else parts
+        commands = (
+            tuple(command for command in TRAINER_COMMANDS if command not in TRAINER_ACTION_COMMANDS)
+            if parts == ["all"]
+            else parts
+        )
         for command in commands:
             script.post({"type": "conf", "k": "invoke", "v": prefix + command})
 
@@ -208,6 +227,22 @@ def run(
         _capture_proxy_bridge(config) if direct_profile is not None else None
     )
     direct_settings = dict(config.direct)
+    # Direct mode now contains the shared extra installer. Keep the default
+    # path's init payload stable, but forward explicit non-default extra
+    # choices (and --no-extra) so custom configurations are honored.
+    if not config.scripts.extra:
+        direct_settings["extra_enabled"] = False
+    for key, value in config.extra.items():
+        if _DEFAULT_EXTRA_SETTINGS.get(key) != value:
+            direct_settings[key] = value
+    if config.scripts.trainer:
+        direct_settings["trainer_enabled"] = True
+        direct_settings["trainer_startup_commands"] = list(
+            config.trainer.get("startup_commands", [])
+        )
+        for key, value in config.trainer.items():
+            if key not in {"startup_commands", "dump_json"}:
+                direct_settings[key] = value
     try:
         if capture_proxy_bridge is not None:
             capture_proxy_bridge.start()
@@ -262,6 +297,9 @@ def run(
             print(f"loaded: {name}", flush=True)
 
         trainer = loaded.get("trainer")
+        trainer_control = trainer
+        if direct_profile is not None and config.scripts.trainer:
+            trainer_control = loaded.get("direct")
         if trainer is not None:
             for command in config.trainer.get("startup_commands", []):
                 trainer.post({"type": "conf", "k": "invoke", "v": command})
@@ -275,8 +313,8 @@ def run(
                     raise
                 print(f"target was already running: {exc}", flush=True)
 
-        if trainer is not None:
-            _trainer_cli(trainer)
+        if trainer_control is not None:
+            _trainer_cli(trainer_control)
         else:
             print("scripts active; press Ctrl-C to detach", flush=True)
             try:

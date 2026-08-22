@@ -7,8 +7,11 @@ from pathlib import Path
 import pytest
 
 from openbachelor_ios.profile_generator import (
+    BATTLE_FINISH_METHOD_SPECS,
+    EXTRA_METHOD_SPECS,
     LAYOUT_FIELDS,
     METHOD_SPECS,
+    TRAINER_METHOD_SPECS,
     MachOInfo,
     ProfileGenerationError,
     _load_macho,
@@ -235,6 +238,81 @@ def test_method_resolution_does_not_accept_signature_with_extra_parameter(tmp_pa
         _resolve_methods(script_json, _macho_info())
 
 
+def test_method_resolution_includes_optional_extra_methods_when_unambiguous(tmp_path):
+    entries = _method_entries()
+    entries.extend(
+        {
+            "Address": 0x3000 + index * 4,
+            "Name": spec.name,
+            "Signature": f"void generated({spec.signature});",
+        }
+        for index, spec in enumerate(EXTRA_METHOD_SPECS)
+    )
+    script_json = tmp_path / "script.json"
+    _write_script_json(script_json, entries)
+
+    resolved = _resolve_methods(script_json, _macho_info())
+
+    assert {
+        key: value[0]
+        for key, value in resolved.items()
+        if key.startswith("extra")
+    } == {
+        spec.key: 0x3000 + index * 4
+        for index, spec in enumerate(EXTRA_METHOD_SPECS)
+    }
+
+
+def test_method_resolution_includes_optional_battle_finish_blocker(tmp_path):
+    entries = _method_entries()
+    entries.extend(
+        {
+            "Address": 0x2800 + index * 4,
+            "Name": spec.name,
+            "Signature": f"bool generated({spec.signature});",
+        }
+        for index, spec in enumerate(BATTLE_FINISH_METHOD_SPECS)
+    )
+    script_json = tmp_path / "script.json"
+    _write_script_json(script_json, entries)
+
+    resolved = _resolve_methods(script_json, _macho_info())
+
+    assert {
+        spec.key: resolved[spec.key][0] for spec in BATTLE_FINISH_METHOD_SPECS
+    } == {
+        spec.key: 0x2800 + index * 4
+        for index, spec in enumerate(BATTLE_FINISH_METHOD_SPECS)
+    }
+
+
+def test_method_resolution_includes_optional_trainer_methods_when_unambiguous(
+    tmp_path,
+):
+    entries = _method_entries()
+    entries.extend(
+        {
+            "Address": 0x4000 + index * 4,
+            "Name": spec.name,
+            "Signature": f"void generated({spec.signature});",
+        }
+        for index, spec in enumerate(TRAINER_METHOD_SPECS)
+    )
+    script_json = tmp_path / "script.json"
+    _write_script_json(script_json, entries)
+
+    resolved = _resolve_methods(script_json, _macho_info())
+
+    assert {
+        key: value[0]
+        for key, value in resolved.items()
+        if key.startswith("trainer")
+    } == {
+        spec.key: 0x4000 + index * 4
+        for index, spec in enumerate(TRAINER_METHOD_SPECS)
+    }
+
+
 def test_script_methods_streams_key_and_object_across_one_mib_chunks(tmp_path):
     chunk_size = 1024 * 1024
     key = '"ScriptMethod"'
@@ -300,6 +378,13 @@ def test_layout_parser_resolves_protocol_and_streaming_fields_from_golden_dump()
             "byteArraySize",
             "netMsgId",
             "bestHttpResponseBaseRequest",
+            "networkerPostImplState",
+            "networkerPostImplUrl",
+            "networkerPostImplOutResponse",
+            "webHttpResponseIsTimeout",
+            "webHttpResponseIsError",
+            "webHttpResponseCode",
+            "webHttpResponseError",
         )
     } == {
         "byteArrayBuffer": 0x18,
@@ -307,6 +392,13 @@ def test_layout_parser_resolves_protocol_and_streaming_fields_from_golden_dump()
         "byteArraySize": 0x24,
         "netMsgId": 0x10,
         "bestHttpResponseBaseRequest": 0x78,
+        "networkerPostImplState": 0x10,
+        "networkerPostImplUrl": 0x20,
+        "networkerPostImplOutResponse": 0x40,
+        "webHttpResponseIsTimeout": 0x10,
+        "webHttpResponseIsError": 0x11,
+        "webHttpResponseCode": 0x18,
+        "webHttpResponseError": 0x38,
     }
 
 

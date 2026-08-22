@@ -74,6 +74,12 @@ def _frida_error_message(exc: Exception) -> str:
             "check the jailbreak Frida server entitlement. "
             f"Details: {detail}"
         )
+    if "timeout" in lowered or "timed out" in lowered:
+        return (
+            "Frida timed out while talking to the iPhone; keep it unlocked with the "
+            "target app in the foreground, verify frida-server 17.9.1 is still "
+            f"reachable, and retry. Details: {detail}"
+        )
     if "transport" in lowered or "usb" in lowered or "connection" in lowered:
         return (
             "Frida lost the iPhone connection; reconnect the trusted USB device and "
@@ -133,11 +139,6 @@ def _run_profile_selector(args: argparse.Namespace) -> str | None:
         )
     if args.capture_host is not None and args.capture_proxy_port is None:
         raise ValueError("--capture-host requires --capture-proxy-port")
-    if args.trainer and not args.legacy_agents:
-        raise ValueError(
-            "--trainer is incompatible with direct profile mode; "
-            "use --legacy-agents only for an unstripped compatible build"
-        )
     if args.probe_only and args.profile is not None:
         raise ValueError("--profile cannot be used with --probe-only")
     if args.probe_only or args.legacy_agents:
@@ -315,7 +316,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="load configured core/extra/trainer agents instead of the direct agent",
     )
     launch.add_argument("--no-extra", action="store_true")
-    launch.add_argument("--trainer", action="store_true")
+    launch.add_argument(
+        "--trainer",
+        action="store_true",
+        help="enable trainer controls (direct profile or compatible legacy agents)",
+    )
     launch.add_argument(
         "--probe-only",
         action="store_true",
@@ -491,7 +496,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"{generated.data['version']} ({generated.data['build']})"
             )
             print(f"module UUID: {generated.data['module']['uuid']}")
-            print(f"hooks: {len(generated.data['offsets'])}/{len(METHOD_SPECS)}")
+            offsets = generated.data["offsets"]
+            required_keys = {spec.key for spec in METHOD_SPECS}
+            required_count = len(required_keys.intersection(offsets))
+            optional_count = len(set(offsets).difference(required_keys))
+            print(
+                f"hooks: {required_count}/{len(METHOD_SPECS)} required, "
+                f"{optional_count} optional"
+            )
             for warning in generated.warnings:
                 print(f"warning: {warning}", file=sys.stderr)
             return 0

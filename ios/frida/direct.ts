@@ -1,5 +1,7 @@
 import { ScriptConfig, rewriteUrl } from "./util";
 import { createFloatingOverlay, FloatingOverlay } from "./floating-overlay";
+import { installExtraHooks } from "./extra-hooks";
+import { DirectTrainerControl, installDirectTrainerHooks } from "./direct-trainer";
 
 declare const send: any;
 
@@ -58,6 +60,38 @@ interface BestHttpRequestState {
     completed?: boolean;
 }
 
+const QUEST_BATTLE_FINISH_RESPONSE = JSON.stringify({
+    result: 0,
+    apFailReturn: 0,
+    expScale: 1.2,
+    goldScale: 1.2,
+    rewards: [],
+    firstRewards: [],
+    unlockStages: [],
+    unusualRewards: [],
+    additionalRewards: [],
+    furnitureRewards: [],
+    alert: [],
+    suggestFriend: false,
+    pryResult: [],
+    playerDataDelta: {
+        modified: {},
+        deleted: {},
+    },
+});
+
+const BATTLE_FINISH_BLOCK_LAYOUTS = [
+    "networkerPostImplState",
+    "networkerPostImplUrl",
+    "networkerPostImplOutResponse",
+    "webHttpResponseIsTimeout",
+    "webHttpResponseIsError",
+    "webHttpResponseCode",
+    "webHttpResponseText",
+    "webHttpResponseData",
+    "webHttpResponseError",
+] as const;
+
 const conf = new ScriptConfig({
     no_proxy: true,
     proxy_url: "",
@@ -65,7 +99,20 @@ const conf = new ScriptConfig({
     capture_max_body_bytes: 4 * 1024 * 1024,
     bypass_ssl: true,
     bypass_signatures: true,
+    block_battle_finish_upload: false,
     floating_gui: false,
+    floating_log_console: true,
+    extra_enabled: true,
+    pause_deploy: true,
+    "3x_speed": true,
+    vision: true,
+    vision_font_size: 22,
+    battle_timeline: true,
+    battle_timeline_interval_ms: 200,
+    trainer_enabled: false,
+    trainer_target_fps: 120,
+    trainer_battle_speed: 16,
+    trainer_startup_commands: [],
 });
 
 let profile: DirectProfile;
@@ -81,6 +128,11 @@ let bestHttpDumpHeaders: any = null;
 let nextRequestId = 1;
 let installed = false;
 let floatingOverlay: FloatingOverlay | null = null;
+let extraCapability = false;
+const extraFeatures = new Set<string>();
+let trainerControl: DirectTrainerControl | null = null;
+let battleFinishBlockAvailable = false;
+const retainedNetworkFunctions: any[] = [];
 
 const requests = new Map<string, RequestState>();
 const uploadBodies = new Map<string, BodyData>();
@@ -98,6 +150,271 @@ function emit(payload: Record<string, any>, data?: ArrayBuffer | null): void {
 
 function reportOverlayAction(action: string, details: Record<string, unknown> = {}): void {
     emit({ event: "overlay-action", action, ...details });
+}
+
+function recordExtraRuntimeError(hook: string, error: unknown): void {
+    emit({ event: "extra-runtime-error", hook, error: String(error) });
+}
+
+function installNativeExtraHooks(hooks: string[], errors: string[]): Set<string> {
+    const features = new Set<string>();
+    const pauseOffsets = [
+        "extraUiSwitchSetInteractable",
+        "extraUiControllerGetIsPaused",
+        "extraUiControllerSetPaused",
+        "extraUiControllerOnCardBeginDrag",
+        "extraUiControllerOnBottomMaskClicked",
+    ];
+    if (pauseOffsets.every(hasOffset)) {
+        try {
+            const getIsPaused = new NativeFunction(
+                address("extraUiControllerGetIsPaused"),
+                "uint8",
+                ["pointer", "pointer"],
+            ) as any;
+            const setPaused = new NativeFunction(
+                address("extraUiControllerSetPaused"),
+                "uint8",
+                ["pointer", "uint8", "uint8", "uint8", "pointer"],
+            ) as any;
+            const pauseAroundAction = (name: string) => {
+                safeAttach(name, {
+                    onEnter(this: InvocationContext & {
+                        extraController?: NativePointer;
+                        extraWasPaused?: boolean;
+                    }, args) {
+                        if (!conf.bool("pause_deploy", true) || args[0].isNull()) return;
+                        try {
+                            const wasPaused = Number(getIsPaused(args[0], NULL)) !== 0;
+                            this.extraController = args[0];
+                            this.extraWasPaused = wasPaused;
+                            if (wasPaused) setPaused(args[0], 0, 0, 0, NULL);
+                        } catch (error) {
+                            recordExtraRuntimeError(name, error);
+                        }
+                    },
+                    onLeave(this: InvocationContext & {
+                        extraController?: NativePointer;
+                        extraWasPaused?: boolean;
+                    }) {
+                        if (!this.extraWasPaused || this.extraController === undefined) return;
+                        try {
+                            setPaused(this.extraController, 1, 0, 0, NULL);
+                            emit({ event: "extra-action", feature: "pause_deploy", hook: name });
+                        } catch (error) {
+                            recordExtraRuntimeError(name, error);
+                        }
+                    },
+                }, hooks, errors);
+            };
+
+            safeAttach("extraUiSwitchSetInteractable", {
+                onEnter(args) {
+                    if (conf.bool("pause_deploy", true)) args[1] = ptr(1);
+                },
+            }, hooks, errors);
+            pauseAroundAction("extraUiControllerOnCardBeginDrag");
+            pauseAroundAction("extraUiControllerOnBottomMaskClicked");
+            if (
+                [
+                    "extraUiSwitchSetInteractable",
+                    "extraUiControllerOnCardBeginDrag",
+                    "extraUiControllerOnBottomMaskClicked",
+                ].every(name => hooks.includes(name))
+            ) {
+                features.add("pause_deploy");
+            }
+        } catch (error) {
+            const detail = `pause_deploy: ${String(error)}`;
+            errors.push(detail);
+            emit({ event: "extra-hook-error", feature: "pause_deploy", error: String(error) });
+        }
+    }
+
+    const speedOffsets = [
+        "extraUiTopBarGetSpeedLevel",
+        "extraUiTopBarSetSpeedLevel",
+        "extraUiTopBarOnSpeedSwitcherClicked",
+    ];
+    if (speedOffsets.every(hasOffset)) {
+        try {
+            const getSpeedLevel = new NativeFunction(
+                address("extraUiTopBarGetSpeedLevel"),
+                "int32",
+                ["pointer", "pointer"],
+            ) as any;
+            const setSpeedLevel = new NativeFunction(
+                address("extraUiTopBarSetSpeedLevel"),
+                "void",
+                ["pointer", "int32", "pointer"],
+            ) as any;
+            safeAttach("extraUiTopBarOnSpeedSwitcherClicked", {
+                onEnter(this: InvocationContext & {
+                    extraTopBar?: NativePointer;
+                    extraPreviousSpeed?: number;
+                }, args) {
+                    if (!conf.bool("3x_speed", true) || args[0].isNull()) return;
+                    try {
+                        this.extraTopBar = args[0];
+                        this.extraPreviousSpeed = Number(getSpeedLevel(args[0], NULL));
+                    } catch (error) {
+                        recordExtraRuntimeError("extraUiTopBarOnSpeedSwitcherClicked", error);
+                    }
+                },
+                onLeave(this: InvocationContext & {
+                    extraTopBar?: NativePointer;
+                    extraPreviousSpeed?: number;
+                }) {
+                    if (
+                        this.extraTopBar === undefined
+                        || this.extraPreviousSpeed === undefined
+                    ) return;
+                    try {
+                        let next = this.extraPreviousSpeed + 1;
+                        if (next > 3 || next < 1) next = 1;
+                        setSpeedLevel(this.extraTopBar, next, NULL);
+                        emit({
+                            event: "extra-action",
+                            feature: "3x_speed",
+                            previous: this.extraPreviousSpeed,
+                            next,
+                        });
+                    } catch (error) {
+                        recordExtraRuntimeError("extraUiTopBarOnSpeedSwitcherClicked", error);
+                    }
+                },
+            }, hooks, errors);
+            if (hooks.includes("extraUiTopBarOnSpeedSwitcherClicked")) {
+                features.add("3x_speed");
+            }
+        } catch (error) {
+            const detail = `3x_speed: ${String(error)}`;
+            errors.push(detail);
+            emit({ event: "extra-hook-error", feature: "3x_speed", error: String(error) });
+        }
+    }
+
+    const timelineOffsets = [
+        "extraBattleControllerGetFixedFrameCnt",
+        "extraBattleControllerGetFixedPlayTime",
+        "extraBattleControllerUpdate",
+    ];
+    if (timelineOffsets.every(hasOffset)) {
+        try {
+            const getFixedFrameCnt = new NativeFunction(
+                address("extraBattleControllerGetFixedFrameCnt"),
+                "uint32",
+                ["pointer"],
+            ) as any;
+            // Torappu.FP is a signed 32.32 fixed-point value stored in one
+            // 64-bit register on arm64. Battle time remains below 2^53 in
+            // realistic sessions, so converting the raw integer is exact.
+            const getFixedPlayTime = new NativeFunction(
+                address("extraBattleControllerGetFixedPlayTime"),
+                "int64",
+                ["pointer"],
+            ) as any;
+            let lastTimelineUpdate = 0;
+            safeAttach("extraBattleControllerUpdate", {
+                onLeave() {
+                    if (!conf.bool("battle_timeline", true) || floatingOverlay === null) return;
+                    const now = Date.now();
+                    const configuredInterval = conf.number("battle_timeline_interval_ms", 200);
+                    const interval = Math.max(100, Math.min(configuredInterval, 2000));
+                    if (now - lastTimelineUpdate < interval) return;
+                    lastTimelineUpdate = now;
+                    try {
+                        const rawTime = getFixedPlayTime(NULL);
+                        const seconds = Number(rawTime.toString()) / 4294967296;
+                        const ticks = Number(getFixedFrameCnt(NULL));
+                        if (!Number.isFinite(seconds) || !Number.isFinite(ticks)) return;
+                        floatingOverlay?.record({
+                            event: "battle-timeline",
+                            seconds,
+                            ticks,
+                        });
+                    } catch (error) {
+                        recordExtraRuntimeError("extraBattleControllerUpdate", error);
+                    }
+                },
+            }, hooks, errors);
+            if (hooks.includes("extraBattleControllerUpdate")) {
+                features.add("battle_timeline");
+            }
+        } catch (error) {
+            const detail = `battle_timeline: ${String(error)}`;
+            errors.push(detail);
+            emit({ event: "extra-hook-error", feature: "battle_timeline", error: String(error) });
+        }
+    }
+
+    if (features.size > 0) {
+        emit({
+            event: "extra-ready",
+            backend: "direct-rva",
+            hooks_installed: hooks.filter(name => name.startsWith("extra")),
+            features: Array.from(features),
+        });
+    }
+    return features;
+}
+
+function installExtraIfAvailable(hooks: string[], errors: string[]): void {
+    if (!conf.bool("extra_enabled", true)) {
+        emit({ event: "extra-disabled", reason: "configuration" });
+        return;
+    }
+    const nativeFeatures = installNativeExtraHooks(hooks, errors);
+    for (const feature of nativeFeatures) extraFeatures.add(feature);
+    extraCapability = extraFeatures.size > 0;
+
+    if (unity.findExportByName("il2cpp_get_corlib") === null) {
+        emit({
+            event: "extra-bridge-unavailable",
+            reason: "stripped-il2cpp-exports",
+            features: Array.from(extraFeatures),
+        });
+        emit({
+            event: "extra-capability",
+            available: extraCapability,
+            features: Array.from(extraFeatures),
+            bridge: false,
+        });
+        return;
+    }
+
+    // Do not delay direct-ready while the bridge waits for IL2CPP startup.
+    // Native RVA hooks already cover pause_deploy / 3x_speed when the profile
+    // contains them; the bridge is then used only for missing features such
+    // as the managed vision overlay.
+    void installExtraHooks(conf, emit, {
+        pauseDeploy: !nativeFeatures.has("pause_deploy"),
+        speed: !nativeFeatures.has("3x_speed"),
+        vision: true,
+    }).then(result => {
+        if (result.hooksInstalled.includes("UISwitchToggle.SetInteractable")
+            || result.hooksInstalled.includes("UIController.OnBottomMaskClicked")
+            || result.hooksInstalled.includes("UIController.OnCardBeginDrag")) {
+            extraFeatures.add("pause_deploy");
+        }
+        if (result.hooksInstalled.includes("UITopBar.OnSpeedSwitcherClicked")) {
+            extraFeatures.add("3x_speed");
+        }
+        if (result.hooksInstalled.includes("vision overlay")) {
+            extraFeatures.add("vision");
+        }
+        extraCapability = extraFeatures.size > 0;
+        emit({
+            event: "extra-capability",
+            available: extraCapability,
+            features: Array.from(extraFeatures),
+            bridge_hook_errors: result.hookErrors,
+        });
+    }).catch(error => {
+        // The direct profile remains useful when this target has stripped or
+        // incompatible IL2CPP exports. Extra is explicitly best-effort.
+        emit({ event: "extra-unavailable", error: String(error) });
+    });
 }
 
 function parseInteger(value: JsonNumber, name: string): number {
@@ -270,6 +587,90 @@ function allocateManagedString(value: string): NativePointer {
     if (result.isNull()) throw new Error("FastAllocateString returned null");
     result.add(layout("stringChars")).writeUtf16String(value);
     return result;
+}
+
+function isBlockedBattleUploadUrl(value: string): boolean {
+    const withoutQuery = value.split(/[?#]/, 1)[0].replace(/\/+$/, "");
+    const finalSegment = withoutQuery.slice(withoutQuery.lastIndexOf("/") + 1);
+    return /battlefinish|savebattlereplay/i.test(finalSegment);
+}
+
+function installBattleFinishBlocker(hooks: string[], errors: string[]): boolean {
+    const hookName = "networkerPostImplMoveNext";
+    const missingLayouts = BATTLE_FINISH_BLOCK_LAYOUTS.filter(name => !hasLayout(name));
+    if (!hasOffset(hookName) || missingLayouts.length > 0) {
+        emit({
+            event: "battle-finish-block-unavailable",
+            reason: hasOffset(hookName) ? "profile-layout" : "profile-offset",
+            missing_layouts: missingLayouts,
+        });
+        return false;
+    }
+    if (!conf.bool("block_battle_finish_upload", false)) {
+        emit({ event: "battle-finish-block-disabled", reason: "configuration" });
+        return true;
+    }
+
+    try {
+        const target = address(hookName);
+        const original = new NativeFunction(target, "uint8", ["pointer", "pointer"]);
+        const replacement = new NativeCallback(
+            (stateMachine: NativePointer, methodInfo: NativePointer): number => {
+                let url = "";
+                try {
+                    if (!stateMachine.isNull()) {
+                        const urlPointer = stateMachine.add(layout("networkerPostImplUrl")).readPointer();
+                        url = readManagedString(urlPointer, 64 * 1024);
+                    }
+                } catch (error) {
+                    emit({ event: "battle-finish-block-warning", stage: "read-url", error: String(error) });
+                }
+
+                if (!conf.bool("block_battle_finish_upload", false) || !isBlockedBattleUploadUrl(url)) {
+                    return Number(original(stateMachine, methodInfo));
+                }
+
+                // Finish this coroutine before it can choose BestHTTP,
+                // UnityWebRequest, or the extra-large upload path. The caller
+                // sees a normal HTTP 200 response containing the configured
+                // battle-finish payload, while no transport request is made.
+                stateMachine.add(layout("networkerPostImplState")).writeS32(-1);
+                try {
+                    const response = stateMachine
+                        .add(layout("networkerPostImplOutResponse"))
+                        .readPointer();
+                    if (response.isNull()) throw new Error("WebHttpResponse is null");
+                    const responseText = allocateManagedString(QUEST_BATTLE_FINISH_RESPONSE);
+                    response.add(layout("webHttpResponseIsTimeout")).writeU8(0);
+                    response.add(layout("webHttpResponseIsError")).writeU8(0);
+                    response.add(layout("webHttpResponseCode")).writeS64(200);
+                    response.add(layout("webHttpResponseText")).writePointer(responseText);
+                    response.add(layout("webHttpResponseData")).writePointer(NULL);
+                    response.add(layout("webHttpResponseError")).writePointer(NULL);
+                    emit({
+                        event: "battle-finish-blocked",
+                        url: displayUrl(url),
+                        response_code: 200,
+                    });
+                } catch (error) {
+                    // Fail closed after a matching battle upload: never fall back
+                    // to the original coroutine and accidentally upload it.
+                    emit({ event: "battle-finish-block-error", url: displayUrl(url), error: String(error) });
+                }
+                return 0;
+            },
+            "uint8",
+            ["pointer", "pointer"],
+        );
+        retainedNetworkFunctions.push(original, replacement);
+        Interceptor.replace(target, replacement);
+        hooks.push(hookName);
+        return true;
+    } catch (error) {
+        errors.push(`${hookName}: ${String(error)}`);
+        emit({ event: "battle-finish-block-unavailable", reason: "hook-error", error: String(error) });
+        return false;
+    }
 }
 
 function rewriteManagedUrl(value: NativePointer, source: string): { pointer: NativePointer; url: string } {
@@ -883,7 +1284,7 @@ function requestBody(state: RequestState): BodyData {
     }
 }
 
-function installHooks(): void {
+async function installHooks(): Promise<void> {
     const hooks: string[] = [];
     const errors: string[] = [];
 
@@ -891,6 +1292,7 @@ function installHooks(): void {
     getUrl = new NativeFunction(address("unityWebRequestGetUrl"), "pointer", ["pointer", "pointer"]);
     getResponseCode = new NativeFunction(address("unityWebRequestGetResponseCode"), "int64", ["pointer", "pointer"]);
     getDownloadData = new NativeFunction(address("downloadHandlerGetData"), "pointer", ["pointer", "pointer"]);
+    battleFinishBlockAvailable = installBattleFinishBlocker(hooks, errors);
 
     safeAttach("unityWebRequestGet", {
         onEnter(this: InvocationContext & { capturedUrl?: string }, args) {
@@ -1045,6 +1447,19 @@ function installHooks(): void {
 
     installProprietaryProtocolHooks(hooks, errors);
     installBestHttpHooks(hooks, errors);
+    installExtraIfAvailable(hooks, errors);
+    trainerControl = installDirectTrainerHooks({
+        conf,
+        hasOffset,
+        address,
+        emit,
+        hooks,
+        errors,
+    });
+    const trainerStartupCommands = conf.get<unknown>("trainer_startup_commands", []);
+    if (Array.isArray(trainerStartupCommands)) {
+        for (const command of trainerStartupCommands) conf.invoke(String(command));
+    }
 
     if (conf.bool("bypass_ssl", true)) {
         attachReturnTrue("certificateHandlerValidate", hooks, errors);
@@ -1069,6 +1484,9 @@ function installHooks(): void {
             url_rewrite: !conf.bool("no_proxy", true),
             ssl_bypass: conf.bool("bypass_ssl", true),
             signature_bypass: conf.bool("bypass_signatures", true),
+            battle_finish_block_available: battleFinishBlockAvailable,
+            battle_finish_block_enabled: battleFinishBlockAvailable
+                && conf.bool("block_battle_finish_upload", false),
             proprietary_protocol_capture: [
                 "serverNetMsgSerialize",
                 "serverNetMsgTryDeserialize",
@@ -1076,8 +1494,11 @@ function installHooks(): void {
                 "longServiceNetMsgTryDeserialize",
             ].every(name => hooks.includes(name)),
             streaming_capture: hooks.includes("bestHttpResponseAddStreamedFragment"),
-            extra: false,
-            trainer: false,
+            extra: extraCapability,
+            extra_features: Array.from(extraFeatures),
+            trainer: (trainerControl?.supportedCommands().length ?? 0) > 0,
+            trainer_commands: trainerControl?.supportedCommands() ?? [],
+            trainer_step_units: trainerControl?.supportedStepUnits() ?? [],
         },
     });
 }
@@ -1100,7 +1521,9 @@ function initialize(module: Module): void {
         emit({ event: "direct-profile-mismatch", profile: profile.id, expected_uuid: expectedUuid, actual_uuid: actualUuid });
         return;
     }
-    installHooks();
+    void installHooks().catch(error => {
+        emit({ event: "direct-error", error: String(error) });
+    });
 }
 
 function waitForUnityFramework(): void {
@@ -1136,7 +1559,15 @@ recv("init", message => {
                     captureEnabled = enabled;
                     reportOverlayAction("capture", { enabled });
                 },
+                logConsoleVisible: conf.bool("floating_log_console", true),
                 reportAction: reportOverlayAction,
+                trainerCommands: () => trainerControl?.supportedCommands() ?? [],
+                trainerEnabled: command => trainerControl?.enabledCommands().includes(command) ?? false,
+                setTrainerEnabled: (command, enabled) => {
+                    trainerControl?.invoke(`${enabled ? "enable" : "disable"}:${command}`);
+                },
+                trainerStepUnits: () => trainerControl?.supportedStepUnits() ?? [],
+                requestTrainerStep: (unit, count) => trainerControl?.requestStep(unit, count) ?? false,
             });
         }
         waitForUnityFramework();
@@ -1144,6 +1575,8 @@ recv("init", message => {
         emit({ event: "direct-error", error: String(error) });
     }
 });
+
+conf.startRecvLoop();
 
 recv("shutdown", () => {
     floatingOverlay?.destroy();

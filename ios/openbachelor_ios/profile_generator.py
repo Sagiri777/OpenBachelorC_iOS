@@ -207,6 +207,267 @@ METHOD_SPECS: tuple[MethodSpec, ...] = (
     ),
 )
 
+# Optional transport-independent interception point used to finish selected
+# Networker POST coroutines before they create a BestHTTP/UnityWebRequest
+# object. Older profiles remain usable for capture when this method is absent.
+BATTLE_FINISH_METHOD_SPECS: tuple[MethodSpec, ...] = (
+    MethodSpec(
+        "networkerPostImplMoveNext",
+        "Torappu.Network.Networker.<_PostImpl>d__82$$MoveNext",
+        "const MethodInfo* method",
+    ),
+)
+
+# Direct mode can use these optional RVAs to provide pause-deploy, 3x speed,
+# and throttled battle time/Tick display even when the target has stripped the
+# IL2CPP exports required by frida-il2cpp-bridge. They are deliberately
+# optional so a game update that renames one UI method does not make the
+# network/capture profile impossible to generate.
+EXTRA_METHOD_SPECS: tuple[MethodSpec, ...] = (
+    MethodSpec(
+        "extraUiSwitchSetInteractable",
+        "Torappu.UI.UISwitchToggle$$SetInteractable",
+        "bool val, bool force, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraUiControllerGetIsPaused",
+        "Torappu.Battle.UI.UIController$$get_isPaused",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraUiControllerSetPaused",
+        "Torappu.Battle.UI.UIController$$SetPaused",
+        "bool value, bool quiet, bool force, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraUiControllerOnCardBeginDrag",
+        "Torappu.Battle.UI.UIController$$OnCardBeginDrag",
+        "Torappu_Battle_UI_UICard_o* card, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraUiControllerOnBottomMaskClicked",
+        "Torappu.Battle.UI.UIController$$OnBottomMaskClicked",
+        "Il2CppObject* arg, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraUiTopBarGetSpeedLevel",
+        "Torappu.Battle.UI.UITopBar$$get_speedLevel",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraUiTopBarSetSpeedLevel",
+        "Torappu.Battle.UI.UITopBar$$set_speedLevel",
+        "int32_t value, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraUiTopBarOnSpeedSwitcherClicked",
+        "Torappu.Battle.UI.UITopBar$$OnSpeedSwitcherClicked",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraBattleControllerGetFixedFrameCnt",
+        "Torappu.Battle.BattleController$$get_fixedFrameCnt",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraBattleControllerGetFixedPlayTime",
+        "Torappu.Battle.BattleController$$get_fixedPlayTime",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "extraBattleControllerUpdate",
+        "Torappu.Battle.BattleController$$Update",
+        "const MethodInfo* method",
+    ),
+)
+
+# Direct trainer fallback. These scalar-return methods can be overridden with
+# Frida Interceptor hooks without relying on the IL2CPP export table. As with
+# the direct extra hooks, every entry is optional: a profile remains valid for
+# networking/capture when a gameplay method changed in a newer game build.
+TRAINER_METHOD_SPECS: tuple[MethodSpec, ...] = (
+    MethodSpec(
+        "trainerApplicationSetTargetFrameRate",
+        "UnityEngine.Application$$set_targetFrameRate",
+        "int32_t value, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBattleControllerGetSpeedLevel",
+        "Torappu.Battle.BattleController$$get_speedLevel",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBattleControllerSetTimeScale",
+        "Torappu.Battle.BattleController$$set_timeScale",
+        "float value, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBattleControllerOnSpeedLevelChanged",
+        "Torappu.Battle.BattleController$$_OnSpeedLevelChanged",
+        "int32_t level, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBattleControllerFixedUpdate",
+        "Torappu.Battle.BattleController$$FixedUpdate",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerUiControllerAwake",
+        "Torappu.Battle.UI.UIController$$Awake",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerUiControllerUpdate",
+        "Torappu.Battle.UI.UIController$$Update",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerUiControllerOnDestroy",
+        "Torappu.Battle.UI.UIController$$OnDestroy",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckCardGetCost",
+        "Torappu.Battle.Deck.Card$$get_cost",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckTokenCardGetCost",
+        "Torappu.Battle.Deck.TokenCard$$get_cost",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckCardGetDontOccupyDeployCnt",
+        "Torappu.Battle.Deck.Card$$get_dontOccupyDeployCnt",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerTileGetBuildableType",
+        "Torappu.Battle.Tile$$get_buildableType",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckCardGetState",
+        "Torappu.Battle.Deck.Card$$get_state",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckCardGetRemainingCnt",
+        "Torappu.Battle.Deck.Card$$get_remainingCnt",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckTokenCardGetIsMaxDeployed",
+        "Torappu.Battle.Deck.TokenCard$$get_isMaxDeployed",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckTokenCardGetReadyToSpawn",
+        "Torappu.Battle.Deck.TokenCard$$get_readyToSpawn",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckTokenCardGetCardPolicy",
+        "Torappu.Battle.Deck.TokenCard$$get_cardPolicy",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBObjectGetSide",
+        "Torappu.Battle.BObject$$get_side",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerEntityGetSp",
+        "Torappu.Battle.Entity$$get_sp",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBasicSkillGetAvailableCnt",
+        "Torappu.Battle.BasicSkill$$get_availableCnt",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBasicSkillGetIsUsedUp",
+        "Torappu.Battle.BasicSkill$$get_isUsedUp",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerCharacterGetWithdrawable",
+        "Torappu.Battle.Character$$get_withdrawable",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerCharacterGetManuallyWithdrawable",
+        "Torappu.Battle.Character$$get_manuallyWithdrawable",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerTrapGetWithdrawable",
+        "Torappu.Battle.Trap$$get_withdrawable",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerEntityGetIsHealFree",
+        "Torappu.Battle.Entity$$get_isHealFree",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerAbilityEventCounterGetMaxCount",
+        "Torappu.Battle.Abilities.AbilityEventCounter$$get_maxCount",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerEnemyGetLifePointReduce",
+        "Torappu.Battle.Enemy$$get_lifePointReduce",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBattleControllerModifyLifePoint",
+        "Torappu.Battle.BattleController$$ModifyLifePoint",
+        "int32_t value, Torappu_Battle_Entity_o* source, int32_t side, bool isReachExit, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerTargetSelectorGetOwner",
+        "Torappu.Battle.TargetSelector$$get_owner",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerAdvancedSelectorGetTargetMotion",
+        "Torappu.Battle.AdvancedSelector$$get_targetMotion",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerRandomSelectorGetTargetMotion",
+        "Torappu.Battle.RandomSelector$$get_targetMotion",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerAdvancedSelectorGetMaxTargetNum",
+        "Torappu.Battle.AdvancedSelector$$get_maxTargetNum",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerBattleUtilLimitMaxNumToBlockCnt",
+        "Torappu.Battle.BattleUtil$$LimitMaxNumToBlockCnt",
+        "int32_t maxNum, int32_t blockNum, bool allowZeroBlockCntLimit, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerDeckCardGetIsAvailable",
+        "Torappu.Battle.Deck.Card$$get_isAvailable",
+        "const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerSquadFriendAssistCheckContained",
+        "Torappu.UI.Squad.SquadFriendAssistStateBean$$CheckIfContainedInCurSquad",
+        "System_String_o* charId, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "trainerSquadHomeCheckStartBattleValid",
+        "Torappu.UI.Squad.SquadHomeState$$_CheckIfStartBattleValid",
+        "const MethodInfo* method",
+    ),
+)
+
 DEFAULT_LAYOUT: dict[str, int] = {
     "stringLength": 16,
     "stringChars": 20,
@@ -221,8 +482,15 @@ DEFAULT_LAYOUT: dict[str, int] = {
     "bestHttpResponseCode": 24,
     "bestHttpResponseData": 72,
     "bestHttpResponseBaseRequest": 120,
+    "networkerPostImplState": 16,
+    "networkerPostImplUrl": 32,
+    "networkerPostImplOutResponse": 64,
+    "webHttpResponseIsTimeout": 16,
+    "webHttpResponseIsError": 17,
+    "webHttpResponseCode": 24,
     "webHttpResponseText": 40,
     "webHttpResponseData": 48,
+    "webHttpResponseError": 56,
     "byteArrayBuffer": 24,
     "byteArrayPosition": 32,
     "byteArraySize": 36,
@@ -240,8 +508,15 @@ LAYOUT_FIELDS: dict[str, tuple[str, str]] = {
     "bestHttpResponseCode": ("HTTPResponse", "<StatusCode>k__BackingField"),
     "bestHttpResponseData": ("HTTPResponse", "<Data>k__BackingField"),
     "bestHttpResponseBaseRequest": ("HTTPResponse", "baseRequest"),
+    "networkerPostImplState": ("Networker.<_PostImpl>d__82", "<>1__state"),
+    "networkerPostImplUrl": ("Networker.<_PostImpl>d__82", "url"),
+    "networkerPostImplOutResponse": ("Networker.<_PostImpl>d__82", "outResponse"),
+    "webHttpResponseIsTimeout": ("WebHttpResponse", "isTimeout"),
+    "webHttpResponseIsError": ("WebHttpResponse", "isError"),
+    "webHttpResponseCode": ("WebHttpResponse", "responseCode"),
     "webHttpResponseText": ("WebHttpResponse", "text"),
     "webHttpResponseData": ("WebHttpResponse", "data"),
+    "webHttpResponseError": ("WebHttpResponse", "error"),
     "byteArrayBuffer": ("ByteArray", "m_buffer"),
     "byteArrayPosition": ("ByteArray", "m_pos"),
     "byteArraySize": ("ByteArray", "m_size"),
@@ -518,8 +793,14 @@ def _script_methods(path: Path) -> Iterator[dict[str, Any]]:
 
 
 def _resolve_methods(path: Path, info: MachOInfo) -> dict[str, tuple[int, str, str]]:
-    wanted = {spec.name: spec for spec in METHOD_SPECS}
-    matches: dict[str, list[dict[str, Any]]] = {spec.key: [] for spec in METHOD_SPECS}
+    optional_specs = (
+        *BATTLE_FINISH_METHOD_SPECS,
+        *EXTRA_METHOD_SPECS,
+        *TRAINER_METHOD_SPECS,
+    )
+    all_specs = (*METHOD_SPECS, *optional_specs)
+    wanted = {spec.name: spec for spec in all_specs}
+    matches: dict[str, list[dict[str, Any]]] = {spec.key: [] for spec in all_specs}
     for method in _script_methods(path):
         name = method.get("Name")
         if not isinstance(name, str) or name not in wanted:
@@ -564,6 +845,18 @@ def _resolve_methods(path: Path, info: MachOInfo) -> dict[str, tuple[int, str, s
         _read_prologue(info, va, spec.key)
     if unresolved:
         raise ProfileGenerationError("unresolved hook methods:\n- " + "\n- ".join(unresolved))
+
+    # Extra/trainer hooks are best-effort. Resolve only unambiguous exact
+    # matches; missing or changed gameplay methods simply leave that
+    # capability unavailable.
+    for spec in optional_specs:
+        candidates = matches[spec.key]
+        if len(candidates) != 1:
+            continue
+        raw_address = candidates[0].get("Address")
+        va, rva = _normalise_method_address(raw_address, info, spec.key)
+        resolved[spec.key] = (rva, spec.name, str(candidates[0].get("Signature", "")))
+        _read_prologue(info, va, spec.key)
     return resolved
 
 

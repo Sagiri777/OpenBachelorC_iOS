@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -128,6 +129,8 @@ def test_direct_run_loads_only_probe_and_direct_and_posts_init(monkeypatch, tmp_
         {"type": "init", "profile": profile_data, "config": agent_config}
     ]
     assert "capture_output_dir" not in direct.messages[0]["config"]
+    assert direct.messages[0]["config"]["floating_gui"] is True
+    assert direct.messages[0]["config"]["floating_log_console"] is True
     assert config.direct["capture"] is False
     assert device.session.events.index(("direct", "load")) < device.session.events.index(
         ("direct", "post")
@@ -137,6 +140,85 @@ def test_direct_run_loads_only_probe_and_direct_and_posts_init(monkeypatch, tmp_
     assert writer.output_dir == runner.PROJECT_ROOT / "captured"
     assert writer.enabled is False
     assert writer.closed is True
+
+
+def test_direct_run_forwards_extra_overrides_and_no_extra(monkeypatch, tmp_path):
+    config = load_config(Path("config.example.json"))
+    config = replace(
+        config.with_overrides(extra=False),
+        extra={**config.extra, "vision_font_size": 30},
+    )
+    profile_data = {
+        "schema": 1,
+        "id": "arknights-2.7.61-59",
+        "bundle_id": config.bundle_id,
+        "version": "2.7.61",
+        "build": "59",
+    }
+    profile = DirectProfile(tmp_path / "profile.json", profile_data)
+    outputs = {}
+    for name in ("probe", "direct"):
+        path = tmp_path / f"{name}.js"
+        path.write_text(f"// {name}", encoding="utf-8")
+        outputs[name] = path
+
+    monkeypatch.setattr(runner, "select_profile", lambda *_args, **_kwargs: profile)
+    monkeypatch.setattr(
+        runner,
+        "compile_scripts",
+        lambda names: {name: outputs[name] for name in names},
+    )
+    monkeypatch.setattr(runner, "_wait_for_session", lambda _event: None)
+    device = FakeDevice()
+
+    runner.run(device, config, profile="auto")
+
+    direct_config = device.session.scripts["direct"].messages[0]["config"]
+    assert direct_config["extra_enabled"] is False
+    assert direct_config["vision_font_size"] == 30
+    assert "pause_deploy" not in direct_config
+
+
+def test_direct_run_enables_trainer_commands_on_direct_agent(monkeypatch, tmp_path):
+    config = load_config(Path("config.example.json"))
+    config = replace(
+        config.with_overrides(trainer=True),
+        trainer={**config.trainer, "startup_commands": ["enable:zero_cost"]},
+    )
+    profile_data = {
+        "schema": 1,
+        "id": "arknights-2.7.61-59",
+        "bundle_id": config.bundle_id,
+        "version": "2.7.61",
+        "build": "59",
+    }
+    profile = DirectProfile(tmp_path / "profile.json", profile_data)
+    outputs = {}
+    for name in ("probe", "direct"):
+        path = tmp_path / f"{name}.js"
+        path.write_text(f"// {name}", encoding="utf-8")
+        outputs[name] = path
+
+    trainer_scripts = []
+    monkeypatch.setattr(runner, "select_profile", lambda *_args, **_kwargs: profile)
+    monkeypatch.setattr(
+        runner,
+        "compile_scripts",
+        lambda names: {name: outputs[name] for name in names},
+    )
+    monkeypatch.setattr(runner, "_trainer_cli", trainer_scripts.append)
+    device = FakeDevice()
+
+    runner.run(device, config, profile="auto")
+
+    direct = device.session.scripts["direct"]
+    assert direct.messages[0]["config"]["trainer_enabled"] is True
+    assert direct.messages[0]["config"]["trainer_startup_commands"] == [
+        "enable:zero_cost"
+    ]
+    assert direct.messages[0]["config"]["trainer_target_fps"] == 120
+    assert direct.messages[0]["config"]["trainer_battle_speed"] == 16
+    assert trainer_scripts == [direct]
 
 
 def test_direct_run_starts_capture_proxy_and_posts_bridge_settings(

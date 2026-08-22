@@ -175,11 +175,23 @@ def load_config(path: Path) -> AppConfig:
         "capture_bridge_host": "",
         "bypass_ssl": True,
         "bypass_signatures": True,
+        "block_battle_finish_upload": False,
+        # The Mac CLI has no launcher switch to opt in at runtime. Keep the
+        # in-game controls visible by default while still allowing an explicit
+        # `direct.floating_gui: false` override.
+        "floating_gui": True,
+        "floating_log_console": True,
         **core,
         **dict(_mapping(raw.get("direct", {}), "direct")),
     }
     if not isinstance(direct["capture_har"], bool):
         raise ValueError("direct.capture_har must be a boolean")
+    if not isinstance(direct["block_battle_finish_upload"], bool):
+        raise ValueError("direct.block_battle_finish_upload must be a boolean")
+    if not isinstance(direct["floating_gui"], bool):
+        raise ValueError("direct.floating_gui must be a boolean")
+    if not isinstance(direct["floating_log_console"], bool):
+        raise ValueError("direct.floating_log_console must be a boolean")
     capture_output_dir = direct.get("capture_output_dir", "captured")
     if not isinstance(capture_output_dir, str) or not capture_output_dir.strip():
         raise ValueError("direct.capture_output_dir must be a non-empty string")

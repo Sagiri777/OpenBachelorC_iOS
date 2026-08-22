@@ -31,16 +31,22 @@
     "capture_bridge_host": "",
     "bypass_ssl": true,
     "bypass_signatures": true,
-    "floating_gui": false
+    "block_battle_finish_upload": false,
+    "floating_gui": true,
+    "floating_log_console": true
   },
   "extra": {
     "pause_deploy": true,
     "3x_speed": true,
     "vision": true,
-    "vision_font_size": 22
+    "vision_font_size": 22,
+    "battle_timeline": true,
+    "battle_timeline_interval_ms": 200
   },
   "trainer": {
     "dump_json": false,
+    "trainer_target_fps": 120,
+    "trainer_battle_speed": 16,
     "startup_commands": []
   }
 }

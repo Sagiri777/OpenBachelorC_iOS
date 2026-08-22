@@ -24,7 +24,7 @@ Mach-O 和 `global-metadata.dat`，并结合 Il2CppDumper 产物生成新版本 
 |---|---|---|
 | `doctor` | 可用 | 检查 Frida 设备、目标应用、版本/build、PID、宿主 Frida 和 `ldid` |
 | `build` | 可用 | 编译 `probe`、`direct`、`core`、`extra`、`trainer` Agent |
-| `run` + direct profile | 当前推荐 | 按 bundle/version/build 选择 profile，支持 UnityWebRequest、BestHTTP、游戏自有 TCP 协议、URL 重写、TLS/签名绕过和按需捕获 |
+| `run` + direct profile | 当前推荐 | 按 bundle/version/build 选择 profile，支持网络重写/捕获，并通过校验 RVA 尽量启用 extra 与 trainer |
 | `profile decrypt --device` | 可用，已实机验证 | 从运行进程导出明文 `UnityFramework`、其它已加载应用 Mach-O 和 metadata |
 | `profile decrypt SOURCE` | 可用 | 整理并校验已解密 IPA、`.app`、解包目录、flat dump 或单个 Mach-O |
 | `profile generate` | 可用，已实机验证 | 从解密二进制、`script.json` 和 `dump.cs` 生成 fail-closed direct profile |
@@ -32,13 +32,21 @@ Mach-O 和 `global-metadata.dat`，并结合 Il2CppDumper 产物生成新版本 
 | `patch-ipa` | 可用 | 向已解密 IPA 注入 Frida Gadget，可选修改 ATS 并用 `ldid` 重签 |
 | 设备端 Launcher | 可构建，待实机回归 | 独立 helper + 状态握手；支持纯 TrollStore Gadget 或越狱 Frida，本机抓包落盘/URL 重定向 |
 | `probe` | 可用 | 报告 Darwin/arm64、`UnityFramework` 和 IL2CPP export 状态，不安装业务 hook |
-| `core` / `extra` / `trainer` | 兼容旧路径 | 依赖未裁剪 IL2CPP exports；不能与 direct profile 模式同时使用 |
+| `core` / `extra` / `trainer` | 兼容旧路径 | 独立 Agent 依赖未裁剪 IL2CPP exports；direct profile 已内置 best-effort extra/trainer，不再需要重复加载 |
 | Android Java hook | 不适用 | iOS 不存在 `Java.perform`、OkHttp Java 层或 `android_dlopen_ext` |
 
 当前内置 profile 是
 [`profiles/arknights-2.7.61-59.json`](profiles/arknights-2.7.61-59.json)，目标为
 `com.hypergryph.arknights` 2.7.61 (59)。该构建的 IL2CPP exports 已裁剪，默认运行时
-加载 `probe + direct`，不会同时加载 `core`、`extra` 或 `trainer`。
+加载 `probe + direct`。内置 profile 还包含 extra 的可校验 RVA：即使 IL2CPP exports 已
+裁剪，direct 也能安装 `pause_deploy`、`3x_speed`，并在原生悬浮窗显示战斗时间与 Tick；
+仅当必要 IL2CPP export 存在时，`vision` 才会异步尝试使用 IL2CPP bridge。内置 profile
+提供 36 个 trainer RVA，当前 direct fallback 可按项控制 18/20 个命令；`global_range`
+与 `allow_dup_char` 仍需兼容旧
+bridge，`unlimited_token` 与 `true_aoe` 是避开 arm64 结构体 ABI/泛型 post-filter 的降级实现。
+状态中的 `capabilities.extra_features`、`capabilities.trainer_commands` 会列出实际可用功能。
+可选能力不可用不会阻塞 `direct-ready`、网络捕获或其它 direct hook；`core`、独立 `extra`
+和独立 `trainer` 仍只在显式旧路径中加载。
 
 ## 环境要求
 
@@ -564,7 +572,18 @@ uv run --locked openbachelor-ios run \
   --legacy-agents
 ```
 
-trainer 只能与 legacy 模式一起启用：
+推荐直接在 profile 模式启用 trainer。目标恢复后会进入交互式命令行；输入
+`enable zero_cost`、`disable zero_cost` 或 `enable all`：
+
+```bash
+uv run --locked openbachelor-ios run \
+  --mode jailbreak --attach \
+  --trainer
+```
+
+也可以在 `trainer.startup_commands` 中预设 `enable:<name>`。profile/prologue 校验失败的
+命令会报告 `trainer-command-unavailable`，不会退化为未校验地址。只有确认目标未裁剪且与
+IL2CPP bridge 兼容、并且确实需要 direct fallback 未覆盖的命令时，才使用旧路径：
 
 ```bash
 uv run --locked openbachelor-ios run \
@@ -572,7 +591,19 @@ uv run --locked openbachelor-ios run \
   --legacy-agents --trainer
 ```
 
-direct profile 模式下传 `--trainer` 会被拒绝，避免同时加载两套不兼容 hook。
+当前内置 2.7.61 (59) profile 的 direct 命令如下：
+
+- 参考 [ChaomengOrion/Arknights-Assist](https://github.com/ChaomengOrion/Arknights-Assist)
+  的功能思路、针对当前 iOS dump 独立实现的 direct 能力：`unlock_fps`（默认目标 120）、
+  `battle_speed_16x`（高风险、默认关闭）、`tas_pause` 和动作命令 `tas_step`；悬浮窗可在
+  暂停时分别按 Tick 或渲染帧推进，数量支持输入 `1`–`10000`。步进结束后仍保持暂停，
+  再关闭 `tas_pause` 即可恢复；
+- 完整标量 hook：`zero_cost`、`zero_deploy_cnt`、`deploy_everywhere`、
+  `zero_cooldown`、`no_sp`、`withdraw_everything`、`heal_everyone`、
+  `unlimited_ammo`、`eat_enemy`、`anti_air`、`no_ban_card`、`cloner_assist`；
+- 降级可用：`unlimited_token`（不替换 `ObscuredInt get_maxDeployCnt` 返回结构体）、
+  `true_aoe`（提高目标上限，但不跳过两个泛型 post-filter）；
+- direct 不可用：`global_range`、`allow_dup_char`。这两项需要兼容的 legacy bridge。
 
 ## TrollStore + Gadget
 
@@ -670,7 +701,7 @@ TROLLFOOLS_SOURCE_DIR=/path/to/TrollFools \
 两个后端均可选择：
 
 - 本机抓包：不改写 URL，捕获写入
-  `/var/mobile/Library/OpenBachelorLauncher/captured/capture.jsonl` 和 `bodies/`；
+  “文件”App 的“在我的 iPhone/OB Launcher/Logs/captured/capture.jsonl”和 `bodies/`；
 - 服务重定向：将目标请求改写到界面中填写的 HTTP(S) 服务。
 
 启动器使用独立、单实例 helper 保持 Frida session；helper 与界面通过带会话 ID 的
@@ -680,8 +711,13 @@ helper 再附加并加载脚本；系统拒绝自动切换 App 时，也可在�
 suspended spawn；spawn 失败时回退到系统唤起，并重新枚举真实 PID 后 attach。
 之后不依赖 launcher 继续在前台，也不需要 Mac/USB/`iproxy`。
 direct agent 默认还会在游戏内安装可拖动、可折叠的原生悬浮控制台，用于查看实时事件摘要、
-切换本会话抓包、复制或清空面板内容。可在 Launcher 配置中关闭；清空面板不会删除磁盘日志。
-当前文本日志位于 `session.log`，历史文本日志和逐会话 JSONL 事件保存在同目录的 `logs/`。
+战斗时间/Tick、切换本会话抓包、逐项控制 Trainer、复制或清空面板内容。可在 Launcher
+配置中单独关闭滚动日志而保留紧凑控制面板，收起后关卡内浮标会显示当前 Tick。Trainer 使用
+可连续操作的分类网格，并提供可输入数量的 Tick/帧暂停步进；清空面板或隐藏滚动日志都不会
+删除磁盘日志。
+Launcher 状态卡提供“打开日志位置”，可直接进入系统“文件”界面；也可手动访问
+“在我的 iPhone/OB Launcher/Logs”。其中 `session.log` 是当前文本日志，历史文本日志保存为
+`session-*.log`，逐会话结构化事件保存为 `events-*.jsonl`，本机抓包位于 `captured/`。
 IPA 默认内置当前仓库的 `arknights-2.7.61-59` profile，也可在构建时用
 `OPENBACHELOR_PROFILE=/path/to/profile.json` 替换。profile 不匹配时 direct agent 会
 fail closed，并在状态卡中显示错误。完整说明见 [`launcher/README.md`](launcher/README.md)。
@@ -719,14 +755,27 @@ fail closed，并在状态卡中显示错误。完整说明见 [`launcher/README
     "capture_upstream_proxy": "",
     "capture_bridge_host": "",
     "bypass_ssl": true,
-    "bypass_signatures": true
+    "bypass_signatures": true,
+    "block_battle_finish_upload": false,
+    "floating_gui": true,
+    "floating_log_console": true
   }
 }
 ```
 
+Mac 命令行的 direct profile 模式默认启用游戏内悬浮窗，包括滚动日志和本会话控制；旧的
+`config.json` 即使没有这两个字段，也会采用上述默认值。需要关闭时显式设置
+`direct.floating_gui=false`；只想隐藏滚动日志并保留紧凑控制面板时设置
+`direct.floating_log_console=false`。
+
 使用 direct profile 时，runner 总会加载 `direct`，并按 `scripts.probe` 决定是否同时加载
-`probe`。`scripts.core`、`scripts.extra`、`scripts.trainer` 以及 `extra`/`trainer` 配置只在
-显式 `--legacy-agents` 模式生效。
+`probe`。`extra` 配置会传给 direct 内置安装器（默认值无需重复传递）；`--no-extra` 会
+关闭 direct RVA 和 bridge 两条 extra 路径。新 profile 会从 `script.json` 尽量生成
+`pause_deploy` / `3x_speed` / `battle_timeline`、战斗记录拦截和 direct trainer 所需的可校验 RVA；
+缺失这些可选方法不会
+阻止网络 profile 生成。`scripts.trainer=true` 或 `--trainer` 会把 trainer 配置传给
+direct，并使用同一 direct script 的交互命令通道；`scripts.core` 和独立 trainer Agent
+只在显式 `--legacy-agents` 模式加载。
 
 ### URL 重写
 
@@ -750,6 +799,37 @@ iPhone 中的 `127.0.0.1` 指向 iPhone 自身，不是 Mac。若 OpenBachelor S
 - 若目标是明文 HTTP，Gadget IPA 已按需要使用 `--allow-http`，或应用已有合适 ATS 配置。
 
 `bypass_ssl` 和 `bypass_signatures` 会修改目标应用的校验结果，仅应用于获授权的测试环境。
+
+### 不上传战斗记录
+
+将 `direct.block_battle_finish_upload` 设为 `true` 后，direct agent 会在游戏的通用
+`Networker._PostImpl` 协程选择 BestHTTP、UnityWebRequest 或大请求通道之前检查 URL。末级路径名
+包含 `battleFinish`（不区分大小写，包括 `multiBattleFinish`、`singleBattleFinish` 等）或
+`saveBattleReplay` 的请求会直接完成，不会创建或发送实际网络请求，并向游戏返回 HTTP 200
+和以下本地 JSON：
+
+```json
+{
+  "result": 0,
+  "apFailReturn": 0,
+  "expScale": 1.2,
+  "goldScale": 1.2,
+  "rewards": [],
+  "firstRewards": [],
+  "unlockStages": [],
+  "unusualRewards": [],
+  "additionalRewards": [],
+  "furnitureRewards": [],
+  "alert": [],
+  "suggestFriend": false,
+  "pryResult": [],
+  "playerDataDelta": {"modified": {}, "deleted": {}}
+}
+```
+
+每次命中都会产生 `battle-finish-blocked` 事件；开启抓包时也不会出现对应的上游 request 事件。
+该功能默认关闭。设备端 Launcher 可通过“不上传战斗记录”开关启用。由于服务器不会收到结算，
+相关奖励、进度和理智变化不会由服务器持久化。
 
 ### 启用捕获
 
