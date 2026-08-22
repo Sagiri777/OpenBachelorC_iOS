@@ -33,15 +33,31 @@ TROLLFOOLS_LIBCRYPTO_SHA256=a5d86da73d98c926849a31bee5846a4f5645fb164ae8353d123a
 TROLLFOOLS_LIBIOSEXEC_SHA256=47d341ce672c114072f6ccc1d9f6dcc323e798d4798e800e1e8bf42ea281ef50
 DOWNLOAD_PROXY=${OPENBACHELOR_DOWNLOAD_PROXY:-${FRIDA_DOWNLOAD_PROXY:-}}
 PROFILE=${OPENBACHELOR_PROFILE:-"$IOS_DIR/profiles/arknights-2.7.61-59.json"}
+LAUNCHER_INFO_PLIST="$SCRIPT_DIR/App/Info.plist"
 
 mkdir -p "$CACHE_DIR" "$BUILD_DIR" "$DIST_DIR"
-required_tools=(awk codesign curl ldid lipo node plutil shasum tar unzip xcrun xz zip)
+required_tools=(awk codesign curl ldid lipo node perl plutil shasum tar unzip xcrun xz zip)
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     print -u2 "error: required build tool not found: $tool"
     exit 1
   fi
 done
+
+current_launcher_version=$(plutil -extract CFBundleShortVersionString raw -o - "$LAUNCHER_INFO_PLIST")
+current_launcher_build=$(plutil -extract CFBundleVersion raw -o - "$LAUNCHER_INFO_PLIST")
+if [[ ! "$current_launcher_version" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]]; then
+  print -u2 "error: CFBundleShortVersionString must use major.minor.patch: $current_launcher_version"
+  exit 1
+fi
+if [[ ! "$current_launcher_build" =~ '^[0-9]+$' ]]; then
+  print -u2 "error: CFBundleVersion must be a non-negative integer: $current_launcher_build"
+  exit 1
+fi
+version_parts=("${(@s:.:)current_launcher_version}")
+next_launcher_version="${version_parts[1]}.${version_parts[2]}.$((version_parts[3] + 1))"
+next_launcher_build=$((current_launcher_build + 1))
+print "version: $current_launcher_version ($current_launcher_build) -> $next_launcher_version ($next_launcher_build)"
 
 verify_sha256() {
   local file_path=$1
@@ -183,7 +199,7 @@ cc=(xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=15.0 -isysroot
 app="$BUILD_DIR/Payload/OpenBachelorLauncher.app"
 
 "${cc[@]}" -fobjc-arc -Wall -Wextra -Werror "$SCRIPT_DIR/App/LauncherApp.m" \
-  -framework UIKit -framework Foundation -framework CoreServices \
+  -framework UIKit -framework Foundation -framework CoreServices -framework UniformTypeIdentifiers \
   -o "$app/OpenBachelorLauncher"
 "${cc[@]}" -fobjc-arc -Wall -Wextra -Werror -I"$DEVKIT_DIR" \
   "$SCRIPT_DIR/Helper/OpenBachelorHelper.m" "$DEVKIT_DIR/libfrida-core.a" \
@@ -205,6 +221,8 @@ ldid -e "$app/OpenBachelorHelper" | plutil -lint - >/dev/null
 ldid -e "$app/OpenBachelorInjector" | plutil -lint - >/dev/null
 
 cp "$SCRIPT_DIR/App/Info.plist" "$app/Info.plist"
+plutil -replace CFBundleShortVersionString -string "$next_launcher_version" "$app/Info.plist"
+plutil -replace CFBundleVersion -string "$next_launcher_build" "$app/Info.plist"
 icon_generator="$BUILD_DIR/IconGenerator"
 xcrun --sdk macosx clang -fobjc-arc "$SCRIPT_DIR/App/IconGenerator.m" \
   -framework AppKit -o "$icon_generator"
@@ -327,14 +345,41 @@ cp "$output" "$tipa_output"
 unzip -t "$output" >/dev/null
 unzip -t "$tipa_output" >/dev/null
 unzip -t "$gadget_output" >/dev/null
+packaged_info="$BUILD_DIR/PackagedLauncher-Info.plist"
+unzip -p "$output" Payload/OpenBachelorLauncher.app/Info.plist > "$packaged_info"
+packaged_version=$(plutil -extract CFBundleShortVersionString raw -o - "$packaged_info")
+packaged_build=$(plutil -extract CFBundleVersion raw -o - "$packaged_info")
+if [[ "$packaged_version" != "$next_launcher_version" || "$packaged_build" != "$next_launcher_build" ]]; then
+  print -u2 "error: packaged launcher version mismatch: $packaged_version ($packaged_build)"
+  exit 1
+fi
+
 output_sha=$(shasum -a 256 "$output" | awk '{print $1}')
 gadget_output_sha=$(shasum -a 256 "$gadget_output" | awk '{print $1}')
+
+# Only persist the increment after every archive has been created, verified,
+# and hashed, so a failed build does not consume a version number.
+next_info_plist="$BUILD_DIR/Info.plist.next"
+cp -p "$LAUNCHER_INFO_PLIST" "$next_info_plist"
+CURRENT_LAUNCHER_VERSION="$current_launcher_version" \
+NEXT_LAUNCHER_VERSION="$next_launcher_version" \
+CURRENT_LAUNCHER_BUILD="$current_launcher_build" \
+NEXT_LAUNCHER_BUILD="$next_launcher_build" \
+  perl -0pi -e '
+    $version_count = s{(<key>CFBundleShortVersionString</key>\s*<string>)\Q$ENV{CURRENT_LAUNCHER_VERSION}\E(</string>)}{$1$ENV{NEXT_LAUNCHER_VERSION}$2};
+    $build_count = s{(<key>CFBundleVersion</key>\s*<string>)\Q$ENV{CURRENT_LAUNCHER_BUILD}\E(</string>)}{$1$ENV{NEXT_LAUNCHER_BUILD}$2};
+    die "launcher version replacement failed\n" unless $version_count == 1 && $build_count == 1;
+  ' "$next_info_plist"
+plutil -lint "$next_info_plist" >/dev/null
+mv "$next_info_plist" "$LAUNCHER_INFO_PLIST"
+
 print "built: $output"
 print "sha256: $output_sha"
 print "built: $tipa_output"
 print "sha256: $output_sha"
 print "built: $gadget_output"
 print "sha256: $gadget_output_sha"
+print "version: $packaged_version ($packaged_build)"
 print "profile: $PROFILE"
 print "bundle: $profile_bundle"
 if [[ -n "$DEVKIT_SOURCE_DIR" ]]; then

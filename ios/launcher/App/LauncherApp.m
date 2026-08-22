@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <dispatch/dispatch.h>
 #import <objc/message.h>
 #import <errno.h>
@@ -22,9 +23,22 @@ static const uint32_t OBPersonaOverride = 1;
 
 static NSString * const OBStateDirectory = @"/var/mobile/Library/OpenBachelorLauncher";
 static NSString * const OBHelperPIDPath = @"/var/mobile/Library/OpenBachelorLauncher/helper.pid";
-static NSString * const OBLogPath = @"/var/mobile/Library/OpenBachelorLauncher/session.log";
 static NSString * const OBStatusPath = @"/var/mobile/Library/OpenBachelorLauncher/status.json";
-static NSString * const OBLogsDirectory = @"/var/mobile/Library/OpenBachelorLauncher/logs";
+// Keep the helper state outside the app container (it is also used by the
+// root-persona helper), but put all user-facing logs in Documents.  With
+// UIFileSharingEnabled enabled in Info.plist this directory is visible in the
+// system Files app under "On My iPhone/OB Launcher/Logs".
+static NSString *OBLogPath;
+static NSString *OBLogsDirectory;
+
+static void OBPrepareUserLogPaths(void) {
+    if (OBLogsDirectory.length != 0 && OBLogPath.length != 0) return;
+    NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,
+                                                               NSUserDomainMask, YES).firstObject;
+    if (documents.length == 0) return;
+    OBLogsDirectory = [documents stringByAppendingPathComponent:@"Logs"];
+    OBLogPath = [OBLogsDirectory stringByAppendingPathComponent:@"session.log"];
+}
 
 static NSDictionary *OBRunInjector(NSString *command, NSString *bundleID, NSError **error) {
     NSString *injector = [NSBundle.mainBundle pathForResource:@"OpenBachelorInjector" ofType:nil];
@@ -104,7 +118,7 @@ static NSDictionary *OBRunInjector(NSString *command, NSString *bundleID, NSErro
     return nil;
 }
 
-@interface OBLauncherViewController : UIViewController <UITextFieldDelegate>
+@interface OBLauncherViewController : UIViewController <UITextFieldDelegate, UIDocumentPickerDelegate>
 @end
 
 @implementation OBLauncherViewController {
@@ -116,6 +130,9 @@ static NSDictionary *OBRunInjector(NSString *command, NSString *bundleID, NSErro
     UISwitch *_signatureSwitch;
     UISwitch *_passthroughSwitch;
     UISwitch *_overlaySwitch;
+    UISwitch *_logConsoleSwitch;
+    UISwitch *_battleFinishBlockSwitch;
+    UISwitch *_trainerSwitch;
     UILabel *_gadgetStatusLabel;
     UILabel *_statusLabel;
     UIButton *_launchButton;
@@ -196,14 +213,24 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
     UISwitch *signatureSwitch;
     UISwitch *passthroughSwitch;
     UISwitch *overlaySwitch;
+    UISwitch *logConsoleSwitch;
+    UISwitch *battleFinishBlockSwitch;
+    UISwitch *trainerSwitch;
     [form addArrangedSubview:[self switchRow:@"绕过 TLS 校验" detail:@"仅用于已授权测试环境" control:&sslSwitch defaultOn:YES]];
     [form addArrangedSubview:[self switchRow:@"绕过业务签名" detail:@"匹配当前 direct profile" control:&signatureSwitch defaultOn:YES]];
     [form addArrangedSubview:[self switchRow:@"包含遥测域名" detail:@"关闭时保留更新与遥测直连" control:&passthroughSwitch defaultOn:NO]];
-    [form addArrangedSubview:[self switchRow:@"游戏内悬浮窗" detail:@"实时日志与会话操作" control:&overlaySwitch defaultOn:YES]];
+    [form addArrangedSubview:[self switchRow:@"游戏内悬浮窗" detail:@"战斗 Tick、抓包与 Trainer 快捷控制" control:&overlaySwitch defaultOn:YES]];
+    [form addArrangedSubview:[self switchRow:@"悬浮窗滚动日志" detail:@"关闭后默认使用紧凑面板，磁盘日志仍会完整保存" control:&logConsoleSwitch defaultOn:YES]];
+    [form addArrangedSubview:[self switchRow:@"不上传战斗记录" detail:@"拦截 battleFinish 与 saveBattleReplay 请求并在本地返回空奖励响应" control:&battleFinishBlockSwitch defaultOn:NO]];
+    [form addArrangedSubview:[self switchRow:@"Trainer 控制" detail:@"在游戏悬浮窗中控制功能及 Tick/帧暂停步进" control:&trainerSwitch defaultOn:NO]];
     _sslSwitch = sslSwitch;
     _signatureSwitch = signatureSwitch;
     _passthroughSwitch = passthroughSwitch;
     _overlaySwitch = overlaySwitch;
+    _logConsoleSwitch = logConsoleSwitch;
+    _battleFinishBlockSwitch = battleFinishBlockSwitch;
+    _trainerSwitch = trainerSwitch;
+    [_trainerSwitch addTarget:self action:@selector(trainerChanged) forControlEvents:UIControlEventValueChanged];
 
     UIView *gadgetCard = [self card];
     UIStackView *gadgetStack = [self stackInCard:gadgetCard];
@@ -240,6 +267,13 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
     statusHeader.alignment = UIStackViewAlignmentCenter;
     [statusStack addArrangedSubview:statusHeader];
     [statusHeader addArrangedSubview:[self sectionLabel:@"SESSION STATUS"]];
+    UIButton *openLogs = [UIButton buttonWithType:UIButtonTypeSystem];
+    [openLogs setTitle:@"打开日志位置" forState:UIControlStateNormal];
+    [openLogs setTitleColor:OBAccent() forState:UIControlStateNormal];
+    openLogs.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    openLogs.accessibilityLabel = @"在文件 App 中打开日志位置";
+    [openLogs addTarget:self action:@selector(openLogLocation) forControlEvents:UIControlEventTouchUpInside];
+    [statusHeader addArrangedSubview:openLogs];
     UIButton *stop = [UIButton buttonWithType:UIButtonTypeSystem];
     [stop setTitle:@"停止" forState:UIControlStateNormal];
     [stop setTitleColor:[UIColor colorWithRed:1 green:0.45 blue:0.45 alpha:1] forState:UIControlStateNormal];
@@ -250,6 +284,8 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
     _statusLabel.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
     [statusStack addArrangedSubview:_statusLabel];
 
+    OBPrepareUserLogPaths();
+    [self prepareUserLogDirectory];
     [self restoreSettings];
     [self backendChanged];
     [self refreshGadgetStatus];
@@ -350,6 +386,43 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
     return row;
 }
 
+- (BOOL)prepareUserLogDirectory {
+    OBPrepareUserLogPaths();
+    if (OBLogsDirectory.length == 0) return NO;
+    NSError *error = nil;
+    BOOL created = [NSFileManager.defaultManager createDirectoryAtPath:OBLogsDirectory
+                                             withIntermediateDirectories:YES
+                                                              attributes:@{NSFilePosixPermissions: @0700}
+                                                                   error:&error];
+    if (!created) {
+        _statusLabel.text = [NSString stringWithFormat:@"无法准备日志目录：%@", error.localizedDescription ?: @"未知错误"];
+        return NO;
+    }
+    chmod(OBLogsDirectory.fileSystemRepresentation, 0700);
+    return YES;
+}
+
+- (void)openLogLocation {
+    [self.view endEditing:YES];
+    if (![self prepareUserLogDirectory]) return;
+
+    // UIDocumentPicker is the public Files.app integration point.  Setting
+    // directoryURL makes the picker open directly at Documents/Logs instead
+    // of forcing the user to search for the launcher folder every time.
+    UIDocumentPickerViewController *picker =
+        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem]
+                                                                      asCopy:NO];
+    picker.delegate = self;
+    picker.directoryURL = [NSURL fileURLWithPath:OBLogsDirectory isDirectory:YES];
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    if (urls.count == 0) return;
+    _statusLabel.text = [NSString stringWithFormat:@"已选择日志文件：%@", urls.firstObject.lastPathComponent ?: @"未知文件"];
+}
+
 - (void)modeChanged {
     BOOL capture = _modeControl.selectedSegmentIndex == 1;
     _endpointField.accessibilityLabel = capture ? @"本机抓包不需要服务 URL" : @"重定向服务 URL";
@@ -357,6 +430,10 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
     _endpointField.alpha = capture ? 0.45 : 1;
     NSString *placeholder = capture ? @"本机落盘，无需填写" : @"http://192.168.1.20:8443";
     _endpointField.attributedPlaceholder = [[NSAttributedString alloc] initWithString:placeholder attributes:@{NSForegroundColorAttributeName: [UIColor colorWithWhite:0.43 alpha:1]}];
+}
+
+- (void)trainerChanged {
+    if (_trainerSwitch.on) _overlaySwitch.on = YES;
 }
 
 - (void)backendChanged {
@@ -388,6 +465,10 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
     if ([defaults objectForKey:@"bypass_signatures"]) _signatureSwitch.on = [defaults boolForKey:@"bypass_signatures"];
     _passthroughSwitch.on = [defaults boolForKey:@"include_passthrough"];
     if ([defaults objectForKey:@"floating_gui"]) _overlaySwitch.on = [defaults boolForKey:@"floating_gui"];
+    if ([defaults objectForKey:@"floating_log_console"]) _logConsoleSwitch.on = [defaults boolForKey:@"floating_log_console"];
+    if ([defaults objectForKey:@"block_battle_finish_upload"]) _battleFinishBlockSwitch.on = [defaults boolForKey:@"block_battle_finish_upload"];
+    if ([defaults objectForKey:@"trainer_enabled"]) _trainerSwitch.on = [defaults boolForKey:@"trainer_enabled"];
+    [self trainerChanged];
     [self modeChanged];
 }
 
@@ -432,6 +513,7 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
     [self.view endEditing:YES];
     NSString *validation = [self validationError];
     if (validation) { _statusLabel.text = validation; return; }
+    if (![self prepareUserLogDirectory]) return;
     NSFileManager *files = NSFileManager.defaultManager;
     NSError *directoryError = nil;
     if (![files createDirectoryAtPath:OBStateDirectory withIntermediateDirectories:YES
@@ -448,6 +530,12 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
         _statusLabel.text = @"无法归档上一会话日志；为避免日志丢失，本次启动已取消。";
         return;
     }
+    NSError *logError = nil;
+    if (![[NSData data] writeToFile:OBLogPath options:NSDataWritingAtomic error:&logError]) {
+        _statusLabel.text = [NSString stringWithFormat:@"无法创建会话日志：%@", logError.localizedDescription ?: @"未知错误"];
+        return;
+    }
+    chmod(OBLogPath.fileSystemRepresentation, 0600);
     [files removeItemAtPath:OBStatusPath error:nil];
 
     BOOL capture = _modeControl.selectedSegmentIndex == 1;
@@ -460,8 +548,14 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
         @"proxy_encode_scheme": @NO,
         @"proxy_include_passthrough": @(_passthroughSwitch.on),
         @"bypass_ssl": @(_sslSwitch.on), @"bypass_signatures": @(_signatureSwitch.on),
+        @"block_battle_finish_upload": @(_battleFinishBlockSwitch.on),
         @"capture_max_body_bytes": @4194304,
-        @"floating_gui": @(_overlaySwitch.on),
+        @"floating_gui": @(_overlaySwitch.on || _trainerSwitch.on),
+        @"floating_log_console": @(_logConsoleSwitch.on),
+        @"battle_timeline": @YES,
+        @"trainer_enabled": @(_trainerSwitch.on),
+        @"trainer_target_fps": @120,
+        @"trainer_battle_speed": @16
     };
     NSData *json = [NSJSONSerialization dataWithJSONObject:@{
         @"session_id": sessionID, @"backend": backend, @"bundle_id": bundle, @"direct": direct,
@@ -501,6 +595,9 @@ static UIColor *OBSecondary(void) { return [UIColor colorWithWhite:0.72 alpha:1]
     [defaults setBool:_signatureSwitch.on forKey:@"bypass_signatures"];
     [defaults setBool:_passthroughSwitch.on forKey:@"include_passthrough"];
     [defaults setBool:_overlaySwitch.on forKey:@"floating_gui"];
+    [defaults setBool:_logConsoleSwitch.on forKey:@"floating_log_console"];
+    [defaults setBool:_battleFinishBlockSwitch.on forKey:@"block_battle_finish_upload"];
+    [defaults setBool:_trainerSwitch.on forKey:@"trainer_enabled"];
     _activeSessionID = sessionID;
     _targetOpenedForSession = NO;
     _statusLabel.text = [backend isEqualToString:@"gadget"]

@@ -7,10 +7,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GADGET_TEMPLATE = PROJECT_ROOT / "launcher" / "Gadget"
 BUILD_SCRIPT = PROJECT_ROOT / "launcher" / "build.sh"
 LAUNCHER_SOURCE = PROJECT_ROOT / "launcher" / "App" / "LauncherApp.m"
+LAUNCHER_INFO = PROJECT_ROOT / "launcher" / "App" / "Info.plist"
 LAUNCHER_ENTITLEMENTS = PROJECT_ROOT / "launcher" / "App" / "launcher.entitlements"
 INJECTOR_SOURCE = PROJECT_ROOT / "launcher" / "Injector" / "OpenBachelorInjector.m"
 HELPER_SOURCE = PROJECT_ROOT / "launcher" / "Helper" / "OpenBachelorHelper.m"
 OVERLAY_SOURCE = PROJECT_ROOT / "frida" / "floating-overlay.ts"
+DIRECT_TRAINER_SOURCE = PROJECT_ROOT / "frida" / "direct-trainer.ts"
 PACKAGE_JSON = PROJECT_ROOT / "package.json"
 GADGET_BOOTSTRAP_SOURCE = GADGET_TEMPLATE / "FridaGadgetBootstrap.c"
 GADGET_EXCEPTOR_PATCH = GADGET_TEMPLATE / "patch-frida-exceptor.mjs"
@@ -107,6 +109,28 @@ def test_launcher_packages_pinned_trollfools_injector_tools():
     assert 'cp -R "$gadget_framework" "$injector_resources/"' in build_script
 
 
+def test_launcher_build_auto_increments_version_after_verified_packaging():
+    build_script = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    calculate = build_script.index(
+        'next_launcher_version="${version_parts[1]}.${version_parts[2]}.'
+    )
+    stage = build_script.index(
+        "plutil -replace CFBundleShortVersionString "
+        '-string "$next_launcher_version" "$app/Info.plist"'
+    )
+    verify = build_script.index(
+        "packaged_version=$(plutil -extract CFBundleShortVersionString "
+        'raw -o - "$packaged_info")'
+    )
+    persist = build_script.index('mv "$next_info_plist" "$LAUNCHER_INFO_PLIST"')
+
+    assert calculate < stage < verify < persist
+    assert 'next_launcher_build=$((current_launcher_build + 1))' in build_script
+    assert '[[ "$packaged_version" != "$next_launcher_version"' in build_script
+    assert "perl -0pi" in build_script
+
+
 def test_launchservices_stays_out_of_root_injector():
     build_script = BUILD_SCRIPT.read_text(encoding="utf-8")
     injector = INJECTOR_SOURCE.read_text(encoding="utf-8")
@@ -172,18 +196,114 @@ def test_direct_agent_packages_a_native_floating_console():
     assert package["devDependencies"]["frida-objc-bridge"] == "8.0.6"
     assert 'from "./floating-overlay"' in direct
     assert 'floating_gui: false' in direct
+    assert 'floating_log_console: true' in direct
+    assert 'logConsoleVisible: conf.bool("floating_log_console", true)' in direct
     assert 'recv("shutdown"' in direct
     assert 'import ObjC from "frida-objc-bridge"' in overlay
+    assert "initWithWindowScene_" in overlay
+    assert "setWindowLevel_" in overlay
+    assert "window.setHidden_(false)" in overlay
+    assert "makeKeyAndVisible" not in overlay
+    assert 'retryMount("objc-runtime-not-loaded")' in overlay
+    assert "rootController.view().addSubview_(panel)" in overlay
     assert "UIPanGestureRecognizer" in overlay
     assert 'button("抓包 开"' in overlay
+    assert 'button("日志 开"' in overlay
     assert 'button("复制"' in overlay
     assert 'button("清空"' in overlay
     assert 'view cleared; saved logs kept on disk' in overlay
 
 
+def test_launcher_exposes_transport_independent_battle_finish_blocker():
+    launcher = LAUNCHER_SOURCE.read_text(encoding="utf-8")
+    helper = HELPER_SOURCE.read_text(encoding="utf-8")
+    direct = (PROJECT_ROOT / "frida" / "direct.ts").read_text(encoding="utf-8")
+    profile = json.loads(
+        PROJECT_ROOT.joinpath("profiles/arknights-2.7.61-59.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert 'switchRow:@"不上传战斗记录"' in launcher
+    assert '@"block_battle_finish_upload": @(_battleFinishBlockSwitch.on)' in launcher
+    assert 'forKey:@"block_battle_finish_upload"' in launcher
+    assert 'block_battle_finish_upload: false' in direct
+    assert 'isBlockedBattleUploadUrl(url)' in direct
+    assert 'battlefinish|savebattlereplay' in direct
+    assert 'Interceptor.replace(target, replacement)' in direct
+    assert 'event: "battle-finish-blocked"' in direct
+    assert "QUEST_BATTLE_FINISH_RESPONSE" in direct
+    assert "apFailReturn: 0" in direct
+    assert "expScale: 1.2" in direct
+    assert "goldScale: 1.2" in direct
+    assert 'battle_finish_block_enabled' in helper
+    assert profile["offsets"]["networkerPostImplMoveNext"] == "0x6e78c8c"
+    assert profile["layout"]["networkerPostImplUrl"] == 0x20
+    assert profile["layout"]["networkerPostImplOutResponse"] == 0x40
+    assert profile["layout"]["webHttpResponseText"] == 0x28
+
+
+def test_launcher_exposes_profile_checked_direct_trainer_controls():
+    launcher = LAUNCHER_SOURCE.read_text(encoding="utf-8")
+    helper = HELPER_SOURCE.read_text(encoding="utf-8")
+    direct = (PROJECT_ROOT / "frida" / "direct.ts").read_text(encoding="utf-8")
+    overlay = OVERLAY_SOURCE.read_text(encoding="utf-8")
+    trainer = DIRECT_TRAINER_SOURCE.read_text(encoding="utf-8")
+    profile = json.loads(
+        PROJECT_ROOT.joinpath("profiles/arknights-2.7.61-59.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert 'switchRow:@"Trainer 控制"' in launcher
+    assert 'switchRow:@"悬浮窗滚动日志"' in launcher
+    assert '@"floating_log_console": @(_logConsoleSwitch.on)' in launcher
+    assert '@"trainer_enabled": @(_trainerSwitch.on)' in launcher
+    assert 'button("Trainer"' in overlay
+    assert "showTrainer" in overlay
+    assert 'unlock_fps: "解锁 120 FPS"' in overlay
+    assert 'tas_step: "TAS 步进"' in overlay
+    assert 'title: "战斗节奏"' in overlay
+    assert 'ObjC.selector("toggleTrainerCommand:")' in overlay
+    assert 'ObjC.selector("stepTicks:")' in overlay
+    assert 'ObjC.selector("stepFrames:")' in overlay
+    assert 'trainerStepCountField.setKeyboardType_(4)' in overlay
+    assert 'requestTrainerStep: (unit, count)' in direct
+    assert 'requestStep(unit: DirectTrainerStepUnit, count: number)' in trainer
+    assert '"trainerBattleControllerFixedUpdate"' in trainer
+    assert "const controllerCaptureReady = uiAwakeHook || uiUpdateHook" in trainer
+    assert "&& controllerCaptureReady" in trainer
+    assert "&& uiDestroyHook" not in trainer
+    assert 'supported.has("tas_step") || commands.length > 0' in overlay
+    assert 'payload.event === "battle-timeline"' in overlay
+    assert 'String(Math.max(0, Math.trunc(battleTimeline!.ticks)))' in overlay
+    assert 'options.reportAction(expanded ? "expand" : "collapse")' not in overlay
+    assert "installDirectTrainerHooks" in (
+        PROJECT_ROOT / "frida" / "direct.ts"
+    ).read_text(encoding="utf-8")
+    assert 'event: "trainer-ready"' in trainer
+    assert '@"trainer_commands": trainerCommands' in helper
+    assert '@"trainer_step_units": trainerStepUnits' in helper
+    assert len(
+        [key for key in profile["offsets"] if key.startswith("trainer")]
+    ) == 36
+    assert {
+        "extraBattleControllerGetFixedFrameCnt",
+        "extraBattleControllerGetFixedPlayTime",
+        "extraBattleControllerUpdate",
+        "trainerApplicationSetTargetFrameRate",
+        "trainerBattleControllerSetTimeScale",
+        "trainerBattleControllerOnSpeedLevelChanged",
+        "trainerBattleControllerFixedUpdate",
+        "trainerUiControllerUpdate",
+    }.issubset(profile["offsets"])
+
+
 def test_launcher_persists_and_archives_session_logs():
     helper = HELPER_SOURCE.read_text(encoding="utf-8")
     launcher = LAUNCHER_SOURCE.read_text(encoding="utf-8")
+    with LAUNCHER_INFO.open("rb") as stream:
+        info = plistlib.load(stream)
 
     assert "append_agent_event(envelope, data)" in helper
     assert '@"events-%.0f-%@.jsonl"' in helper
@@ -193,8 +313,17 @@ def test_launcher_persists_and_archives_session_logs():
     assert "fsync(STDOUT_FILENO)" in helper
     assert 'frida_script_post(script, "{\\"type\\":\\"shutdown\\"}"' in helper
     assert "archiveCurrentLog" in launcher
-    assert 'OBLogsDirectory = @"/var/mobile/Library/OpenBachelorLauncher/logs"' in launcher
-    assert '@"floating_gui": @(_overlaySwitch.on)' in launcher
+    assert "NSDocumentDirectory" in launcher
+    assert 'stringByAppendingPathComponent:@"Logs"' in launcher
+    assert 'setTitle:@"打开日志位置"' in launcher
+    assert "initForOpeningContentTypes" in launcher
+    assert "picker.directoryURL" in launcher
+    assert info["UIFileSharingEnabled"] is True
+    assert info["LSSupportsOpeningDocumentsInPlace"] is True
+    assert "NSString *log_directory = [text_log_path stringByDeletingLastPathComponent]" in helper
+    assert "make_log_item_accessible(event_log_path, 0600)" in helper
+    assert "fchown(log_fd, log_owner_uid, log_owner_gid)" in helper
+    assert '@"floating_gui": @(_overlaySwitch.on || _trainerSwitch.on)' in launcher
 
 
 def test_helper_does_not_fork_after_linked_runtimes_initialize():

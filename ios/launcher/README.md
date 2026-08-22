@@ -65,7 +65,9 @@ TROLLFOOLS_SOURCE_DIR=/path/to/TrollFools \
 
 构建脚本会固定校验 Frida devkit、Gadget、TrollFools 归档及每个设备端工具的 SHA-256，
 同时检查 profile JSON、编译告警、entitlements、上游 Gadget 双架构输入、arm64 兼容切片
-伪签名和产物完整性。
+伪签名和产物完整性。每次成功打包还会把 Launcher 的补丁版本和 build number 各增加 1
+（例如 `0.5.0 (10)` 变为 `0.5.1 (11)`），并将新版本写回 `App/Info.plist`；构建失败不会
+消耗版本号。
 
 ## 仅 TrollStore 使用（无需越狱）
 
@@ -104,7 +106,7 @@ TROLLFOOLS_SOURCE_DIR=/path/to/TrollFools \
 
 1. 填写目标 bundle id，选择“服务重定向”或“本机抓包”。
 2. 重定向模式填写目标 URL，例如 `http://192.168.1.20:8443`；本机抓包无需 URL，
-   请求元数据和 body 会保存到 `/var/mobile/Library/OpenBachelorLauncher/captured/`。
+   请求元数据和 body 会保存到“文件”App 的“在我的 iPhone/OB Launcher/Logs/captured/”。
 3. Gadget 后端点“自动安装并启动”；越狱后端点“启动并注入”。Gadget 后端会直接请求系统
    切换到目标 App，不依赖 helper 的首次状态轮询；越狱后端先附加已运行进程，否则尝试
    Frida suspended spawn。若 spawn 被 FrontBoard、锁屏状态或当前运行实例拒绝，launcher
@@ -116,24 +118,42 @@ TROLLFOOLS_SOURCE_DIR=/path/to/TrollFools \
    profile UUID 不匹配、agent 初始化失败或 helper 意外退出都会明确显示为错误，不会被误报为
    已启动。
 
-默认启用“游戏内悬浮窗”。direct agent 就绪后，目标 App 内会显示一个可拖动的原生控制台：
+默认启用“游戏内悬浮窗”和“悬浮窗滚动日志”。关闭滚动日志后会以紧凑控制面板启动，
+但 helper 的磁盘日志仍完整保存；也可以在悬浮窗中随时点“日志 开/关”切换。打开 Launcher
+的“Trainer 控制”后会自动保持悬浮窗开启。“不上传战斗记录”默认关闭；开启后，所有末级路径名
+包含 `battleFinish` 或 `saveBattleReplay` 的结算与战斗回放请求都会在选择网络传输前被拦截，
+并在本地返回空奖励成功响应，服务器不会收到请求或持久化对应结算/回放。
+direct agent 就绪后，目标 App 内会显示一个可拖动的原生控制台：
 
-- 标题区域可拖动，右上角可收起为 `OB` 浮标，再点浮标恢复；
+- 标题区域可拖动，右上角可收起为浮标；关卡外显示 `OB`，进入关卡后显示实时 Tick 数；
 - 日志区域实时显示模块、hook、请求/响应和异常摘要，不显示请求查询参数或 body；
-- “抓包 开/关”只切换当前会话的捕获，“复制”复制当前可见日志，“清空”只清空面板显示；
+- 战斗中状态行显示当前时间轴和 Tick，更新限流且不会把每帧数据写入事件日志；
+- “Trainer”按钮打开内嵌的分类网格，可连续切换多项功能而不必反复关闭弹窗；启用数量会显示
+  在按钮上，绿色表示已启用、橙色表示高风险、`▶` 表示一次性动作；
+- 当前内置 profile 的 direct RVA fallback 支持 18/20 个命令，新增 120 FPS、16 倍速、
+  TAS 暂停，以及暂停时的 Tick/渲染帧步进；可在 Trainer 面板输入 `1`–`10000` 后选择
+  “前进 Tick”或“前进帧”，完成后继续保持暂停。16 倍速默认关闭且可能影响回放/同步，
+  未校验或不支持的命令不会显示；
+- “抓包 开/关”只切换当前会话的捕获，“日志 开/关”只控制滚动区显示，“复制”复制当前
+  会话的面板日志，“清空”只清空面板内容；展开和收起不会再产生 `action` 日志；
 - 关闭 Launcher 或切回游戏不会中断 helper 会话。停止会话时会先移除悬浮窗再卸载脚本。
 
-helper 使用单实例锁，重复点击启动不会叠加注入。状态目录中的关键文件为：
+helper 使用单实例锁，重复点击启动不会叠加注入。Launcher 的“打开日志位置”会直接打开
+系统“文件”界面中的日志目录；也可以手动进入“在我的 iPhone/OB Launcher/Logs”。关键文件为：
 
 - `status.json`：当前会话 ID、阶段、PID、更新时间和 `direct-ready` 结果；
-- `session.log`：当前会话文本日志，新会话启动前会原子归档到 `logs/session-*.log`；
-- `logs/events-*.jsonl`：每个会话独立保存的完整 agent 结构化事件日志；
+- `Logs/session.log`：当前会话文本日志，新会话启动前会原子归档为 `Logs/session-*.log`；
+- `Logs/events-*.jsonl`：每个会话独立保存的完整 agent 结构化事件日志；
 - `current-config.json`：最近一次启动配置；
-- `captured/capture.jsonl` 和 `captured/bodies/`：本机抓包结果。
+- `Logs/captured/capture.jsonl` 和 `Logs/captured/bodies/`：本机抓包结果。
 
-这些文件位于 `/var/mobile/Library/OpenBachelorLauncher/`。文本日志使用追加写入，异常退出
-不会在下一次启动时被覆盖；事件日志在正常停止时显式同步并关闭。悬浮窗的“清空”不会删除
-任何磁盘文件。日志与抓包可能包含账号或请求元数据，请只在已授权设备和账号上使用并按需清理。
+`status.json` 与 `current-config.json` 等内部状态仍位于
+`/var/mobile/Library/OpenBachelorLauncher/`；所有文本日志、结构化事件和抓包均写入 App 的
+Documents/Logs，并通过 `UIFileSharingEnabled` 向系统“文件”App 提供访问。helper 会把以
+root persona 创建的日志和目录归属调整为 App 用户，避免“文件”App 只能看到却无法读取。
+文本日志使用追加写入，异常退出不会在下一次启动时被覆盖；事件日志在正常停止时显式同步并
+关闭。悬浮窗的“清空”不会删除任何磁盘文件。日志与抓包可能包含账号或请求元数据，请只在
+已授权设备和账号上使用并按需清理。
 
 ## “不依赖电脑”的边界
 

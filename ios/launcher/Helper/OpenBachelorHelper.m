@@ -32,6 +32,15 @@ static dispatch_source_t termination_source;
 static int singleton_lock_fd = -1;
 static volatile sig_atomic_t stop_requested;
 static BOOL terminal_status_written;
+static uid_t log_owner_uid = (uid_t)-1;
+static gid_t log_owner_gid = (gid_t)-1;
+
+static void make_log_item_accessible(NSString *path, mode_t mode) {
+    if (path.length == 0) return;
+    chmod(path.fileSystemRepresentation, mode);
+    if (log_owner_uid != (uid_t)-1 && log_owner_gid != (gid_t)-1)
+        chown(path.fileSystemRepresentation, log_owner_uid, log_owner_gid);
+}
 
 static void write_status(NSString *state, NSString *message, NSDictionary *details) {
     if (status_path.length == 0) return;
@@ -102,7 +111,7 @@ static void append_capture(NSDictionary *payload, GBytes *bytes) {
         NSString *path = [capture_directory stringByAppendingPathComponent:relative];
         if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
             [body writeToFile:path options:NSDataWritingAtomic error:nil];
-            chmod(path.fileSystemRepresentation, 0600);
+            make_log_item_accessible(path, 0600);
         }
         record[@"body_sha256"] = hash;
         record[@"body_file"] = relative;
@@ -115,7 +124,7 @@ static void append_capture(NSDictionary *payload, GBytes *bytes) {
     NSString *jsonl = [capture_directory stringByAppendingPathComponent:@"capture.jsonl"];
     if (![[NSFileManager defaultManager] fileExistsAtPath:jsonl]) {
         [[NSData data] writeToFile:jsonl options:NSDataWritingAtomic error:nil];
-        chmod(jsonl.fileSystemRepresentation, 0600);
+        make_log_item_accessible(jsonl, 0600);
     }
     NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:jsonl];
     [handle seekToEndOfFile];
@@ -190,11 +199,40 @@ static void message_handler(FridaScript *script, const gchar *message, GBytes *d
         } else if ([envelope[@"type"] isEqual:@"send"] && [event isEqual:@"direct-ready"]) {
             NSArray *hooks = [payload[@"hooks_installed"] isKindOfClass:NSArray.class] ? payload[@"hooks_installed"] : @[];
             NSArray *errors = [payload[@"hook_errors"] isKindOfClass:NSArray.class] ? payload[@"hook_errors"] : @[];
-            NSString *ready = [NSString stringWithFormat:@"注入完成：direct-ready，%lu 个 hook，%lu 个非致命错误。",
-                               (unsigned long)hooks.count, (unsigned long)errors.count];
-            write_status(@"ready", ready, @{@"hooks_installed": @(hooks.count), @"hook_errors": @(errors.count)});
-            fprintf(stdout, "agent: direct-ready hooks=%lu errors=%lu\n",
-                    (unsigned long)hooks.count, (unsigned long)errors.count);
+            NSDictionary *capabilities = [payload[@"capabilities"] isKindOfClass:NSDictionary.class]
+                ? payload[@"capabilities"] : @{};
+            BOOL extra = [capabilities[@"extra"] boolValue];
+            NSArray *extraFeatures = [capabilities[@"extra_features"] isKindOfClass:NSArray.class]
+                ? capabilities[@"extra_features"] : @[];
+            BOOL trainer = [capabilities[@"trainer"] boolValue];
+            BOOL battleFinishBlock = [capabilities[@"battle_finish_block_enabled"] boolValue];
+            NSArray *trainerCommands = [capabilities[@"trainer_commands"] isKindOfClass:NSArray.class]
+                ? capabilities[@"trainer_commands"] : @[];
+            NSArray *trainerStepUnits = [capabilities[@"trainer_step_units"] isKindOfClass:NSArray.class]
+                ? capabilities[@"trainer_step_units"] : @[];
+            NSString *featureText = extraFeatures.count > 0
+                ? [extraFeatures componentsJoinedByString:@", "] : @"无";
+            NSString *stepText = trainerStepUnits.count > 0
+                ? [trainerStepUnits componentsJoinedByString:@"/"] : @"不可用";
+            NSString *ready = [NSString stringWithFormat:@"注入完成：direct-ready，%lu 个 hook，%lu 个非致命错误，战斗记录拦截%@，extra %@（%@），trainer %@（%lu 项，步进 %@）。",
+                               (unsigned long)hooks.count, (unsigned long)errors.count,
+                               battleFinishBlock ? @"已开启" : @"未开启",
+                               extra ? @"可用" : @"不可用", featureText,
+                               trainer ? @"可用" : @"不可用", (unsigned long)trainerCommands.count,
+                               stepText];
+            write_status(@"ready", ready, @{
+                @"hooks_installed": @(hooks.count), @"hook_errors": @(errors.count),
+                @"extra": @(extra), @"extra_features": extraFeatures,
+                @"battle_finish_block_enabled": @(battleFinishBlock),
+                @"trainer": @(trainer), @"trainer_commands": trainerCommands,
+                @"trainer_step_units": trainerStepUnits,
+            });
+            fprintf(stdout, "agent: direct-ready hooks=%lu errors=%lu battle_finish_block=%s extra=%s features=%s trainer=%s commands=%lu step_units=%s\n",
+                    (unsigned long)hooks.count, (unsigned long)errors.count,
+                    battleFinishBlock ? "enabled" : "disabled",
+                    extra ? "available" : "unavailable", featureText.UTF8String,
+                    trainer ? "available" : "unavailable", (unsigned long)trainerCommands.count,
+                    stepText.UTF8String);
         } else if ([envelope[@"type"] isEqual:@"send"] &&
                    ([event isEqual:@"direct-profile-mismatch"] || [event isEqual:@"direct-error"])) {
             NSString *error = [event isEqual:@"direct-profile-mismatch"]
@@ -639,6 +677,12 @@ int main(int argc, char *argv[]) {
         pid_path = [state_directory stringByAppendingPathComponent:@"helper.pid"];
         status_path = [state_directory stringByAppendingPathComponent:@"status.json"];
         text_log_path = @(argv[4]);
+        NSString *log_directory = [text_log_path stringByDeletingLastPathComponent];
+        struct stat log_directory_attributes;
+        if (stat(log_directory.fileSystemRepresentation, &log_directory_attributes) == 0) {
+            log_owner_uid = log_directory_attributes.st_uid;
+            log_owner_gid = log_directory_attributes.st_gid;
+        }
 
         NSData *config_data = [NSData dataWithContentsOfFile:config_path];
         NSData *script_data = [NSData dataWithContentsOfFile:@(argv[2])];
@@ -676,24 +720,23 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "error: another helper session is already running\n");
             return 2;
         }
-        NSString *logs_directory = [state_directory stringByAppendingPathComponent:@"logs"];
         NSError *logs_error = nil;
-        if (![[NSFileManager defaultManager] createDirectoryAtPath:logs_directory
+        if (![[NSFileManager defaultManager] createDirectoryAtPath:log_directory
                                         withIntermediateDirectories:YES
                                                          attributes:@{NSFilePosixPermissions: @0700}
                                                               error:&logs_error]) {
             write_status(@"error", [NSString stringWithFormat:@"无法创建日志目录：%@", logs_error.localizedDescription], nil);
             return 2;
         }
-        chmod(logs_directory.fileSystemRepresentation, 0700);
+        make_log_item_accessible(log_directory, 0700);
         NSString *event_name = [NSString stringWithFormat:@"events-%.0f-%@.jsonl",
                                 [[NSDate date] timeIntervalSince1970], session_id];
-        event_log_path = [logs_directory stringByAppendingPathComponent:event_name];
+        event_log_path = [log_directory stringByAppendingPathComponent:event_name];
         if (![[NSData data] writeToFile:event_log_path options:NSDataWritingAtomic error:&logs_error]) {
             write_status(@"error", [NSString stringWithFormat:@"无法创建事件日志：%@", logs_error.localizedDescription], nil);
             return 2;
         }
-        chmod(event_log_path.fileSystemRepresentation, 0600);
+        make_log_item_accessible(event_log_path, 0600);
         event_log_handle = [NSFileHandle fileHandleForWritingAtPath:event_log_path];
         [event_log_handle seekToEndOfFile];
         if (event_log_handle == nil) {
@@ -706,6 +749,9 @@ int main(int argc, char *argv[]) {
             write_status(@"error", [NSString stringWithFormat:@"无法打开 helper 日志：%s", strerror(errno)], nil);
             return 2;
         }
+        fchmod(log_fd, 0600);
+        if (log_owner_uid != (uid_t)-1 && log_owner_gid != (gid_t)-1)
+            fchown(log_fd, log_owner_uid, log_owner_gid);
         if (dup2(log_fd, STDOUT_FILENO) < 0 || dup2(log_fd, STDERR_FILENO) < 0) {
             close(log_fd);
             write_status(@"error", [NSString stringWithFormat:@"无法重定向 helper 日志：%s", strerror(errno)], nil);
@@ -719,7 +765,7 @@ int main(int argc, char *argv[]) {
                 [[NSDate date] timeIntervalSince1970]);
 
         NSError *directory_error = nil;
-        capture_directory = [state_directory stringByAppendingPathComponent:@"captured"];
+        capture_directory = [log_directory stringByAppendingPathComponent:@"captured"];
         NSString *bodies = [capture_directory stringByAppendingPathComponent:@"bodies"];
         if (![[NSFileManager defaultManager] createDirectoryAtPath:bodies withIntermediateDirectories:YES
                                                         attributes:@{NSFilePosixPermissions: @0700}
@@ -729,6 +775,8 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "error: %s\n", error.UTF8String);
             return 2;
         }
+        make_log_item_accessible(capture_directory, 0700);
+        make_log_item_accessible(bodies, 0700);
         NSString *pid_text = [NSString stringWithFormat:@"%d\n", getpid()];
         if (![pid_text writeToFile:pid_path atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
             write_status(@"error", @"无法写入 helper PID 文件。", nil);
