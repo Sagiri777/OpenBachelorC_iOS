@@ -1,7 +1,7 @@
 # iOS Direct / Extra / Trainer TODO 与技术依据
 
 > 最后分析日期：2026-08-22
-> 当前目标：`明日方舟 2.7.61 (59)`，仅讨论 iOS；Android 不在本文件范围内。
+> 当前目标：`明日方舟 2.7.61 (59)`，仅面向 iOS。
 > 基线：以当前未提交工作树为准，不等同于 `origin/master`。
 
 ## 1. 文档目的和使用规则
@@ -17,7 +17,7 @@
 
 后续更新必须遵守：
 
-1. profile RVA 必须由 `ios/openbachelor_ios/profile_generator.py` 的 `MethodSpec` 自动生成，不在 Agent 中写死地址。
+1. profile RVA 必须由 `openbachelor_ios/profile_generator.py` 的 `MethodSpec` 自动生成，不在 Agent 中写死地址。
 2. 对象字段必须由 profile generator 生成 layout；不得把 `dump.cs` 字段偏移直接固化在 TypeScript 中。
 3. Agent 只有在所需 RVA、prologue、layout 全部存在并校验成功时才报告 capability；否则 fail closed。
 4. 每完成一项，同步勾选本文件，并记录游戏版本/build、Mach-O UUID、设备/iOS、输入、输出、恢复结果和失败原因。
@@ -38,10 +38,10 @@
 
 相关入口：
 
-- `ios/frida/direct.ts`：三类传输、URL 重写、capture、SSL/签名和 battle-finish blocker。
-- `ios/openbachelor_ios/capture.py`：JSONL/HAR/body sidecar 落盘与关联。
-- `ios/openbachelor_ios/capture_proxy.py`：到 Requable/Fiddler 的实时桥接。
-- `ios/openbachelor_ios/profile_generator.py`：所有网络、Extra、Trainer RVA/prologue/layout 的生成入口。
+- `frida/direct.ts`：三类传输、URL 重写、capture、SSL/签名和 battle-finish blocker。
+- `openbachelor_ios/capture.py`：JSONL/HAR/body sidecar 落盘与关联。
+- `openbachelor_ios/capture_proxy.py`：到 Requable/Fiddler 的实时桥接。
+- `openbachelor_ios/profile_generator.py`：所有网络、Extra、Trainer RVA/prologue/layout 的生成入口。
 
 ### 2.2 Extra
 
@@ -54,14 +54,14 @@
 
 相关入口：
 
-- `ios/frida/direct.ts`：Direct Extra 安装、capability 和降级判断。
-- `ios/frida/extra-hooks.ts`：依赖 `frida-il2cpp-bridge` 的旧 Extra。
-- `ios/frida/floating-overlay.ts`：iOS 原生悬浮窗。
-- `ios/profiles/arknights-2.7.61-59.json`：当前已生成 RVA/prologue。
+- `frida/direct.ts`：Direct Extra 安装、capability 和降级判断。
+- `frida/extra-hooks.ts`：依赖 `frida-il2cpp-bridge` 的旧 Extra。
+- `frida/floating-overlay.ts`：iOS 原生悬浮窗。
+- `profiles/arknights-2.7.61-59.json`：当前已生成 RVA/prologue。
 
 ### 2.3 Trainer
 
-`ios/frida/direct-trainer.ts` 目前声明 20 个命令；当前 profile 预计可安装 18 个，其中 2 个只是 partial：
+`frida/direct-trainer.ts` 目前声明 20 个命令；当前 profile 预计可安装 18 个，其中 2 个只是 partial：
 
 - Direct 代码路径可用（16）：`unlock_fps`、`battle_speed_16x`、`tas_pause`、`tas_step`、`zero_cost`、`zero_deploy_cnt`、`deploy_everywhere`、`zero_cooldown`、`no_sp`、`withdraw_everything`、`heal_everyone`、`unlimited_ammo`、`eat_enemy`、`anti_air`、`no_ban_card`、`cloner_assist`。
 - Partial（2）：`unlimited_token`、`true_aoe`。
@@ -112,7 +112,7 @@
 - [ ] 默认排除 `battle_speed_16x`、partial、high-risk、一次性 action 和尚未实机验收的功能。
 - [ ] 如需全开高风险项，使用名称明确的二次命令，例如 `enable unsafe-all`，并要求确认。
 
-当前问题依据：`ios/openbachelor_ios/runner.py` 的 `_trainer_cli` 只排除了 `TRAINER_ACTION_COMMANDS`，没有排除 `battle_speed_16x` 等高风险状态命令。
+当前问题依据：`openbachelor_ios/runner.py` 的 `_trainer_cli` 只排除了 `TRAINER_ACTION_COMMANDS`，没有排除 `battle_speed_16x` 等高风险状态命令。
 
 ### 4.3 capability、风险和冲突可见化
 
@@ -438,7 +438,7 @@
 
 ## 11. 2.7.61 (59) Method/RVA 证据表
 
-> 来源：`ios/dumps/2.7.61-59/il2cppdumper/script.json`。
+> 来源：`dumps/2.7.61-59/il2cppdumper/script.json`。
 > 下表除已进入当前 profile 的项目外，都是 **dump 候选**；地址存在不代表已经生成 prologue 或通过实机验证。
 
 ### 11.1 Direct 网络（当前 profile 已有）
@@ -552,29 +552,29 @@
 
 | 文件 | 需要承担的职责 |
 |---|---|
-| `ios/openbachelor_ios/profile_generator.py` | 增加 `MethodSpec` / layout 解析，是 RVA 和字段偏移的唯一来源 |
-| `ios/profiles/arknights-2.7.61-59.json` | 由 generator 重新生成；包含 RVA、prologue、layout，不手改 |
-| `ios/frida/direct-trainer.ts` | side-gated Direct hook、状态恢复、capability/partial/error 事件 |
-| `ios/frida/direct.ts` | 网络采集/重写、hook registry、运行时状态、Direct Extra/Trainer 编排 |
-| `ios/frida/extra-hooks.ts` | Legacy Extra 读取、生命周期和 bridge fallback |
-| `ios/frida/floating-overlay.ts` | 开关、风险标记、仪表盘、错误和恢复 UI |
-| `ios/openbachelor_ios/capture.py` | filter/redaction、计时关联、summary、压缩/派生文件和安全落盘 |
-| `ios/openbachelor_ios/capture_proxy.py` | 实时 viewer 桥接、错误/吞吐状态和隐私边界 |
-| `ios/openbachelor_ios/runner.py` | CLI 命令、安全 allowlist、全部关闭 |
-| `ios/openbachelor_ios/config.py` / `config.example.json` | 默认值、范围验证和旧配置迁移 |
-| `ios/launcher/*` | Launcher 可见配置与状态传递 |
-| `ios/README.md` | 用户用法、边界、风险和实机步骤 |
-| `ios/tests/*` | profile 生成、配置、命令路由、capability 和恢复回归 |
+| `openbachelor_ios/profile_generator.py` | 增加 `MethodSpec` / layout 解析，是 RVA 和字段偏移的唯一来源 |
+| `profiles/arknights-2.7.61-59.json` | 由 generator 重新生成；包含 RVA、prologue、layout，不手改 |
+| `frida/direct-trainer.ts` | side-gated Direct hook、状态恢复、capability/partial/error 事件 |
+| `frida/direct.ts` | 网络采集/重写、hook registry、运行时状态、Direct Extra/Trainer 编排 |
+| `frida/extra-hooks.ts` | Legacy Extra 读取、生命周期和 bridge fallback |
+| `frida/floating-overlay.ts` | 开关、风险标记、仪表盘、错误和恢复 UI |
+| `openbachelor_ios/capture.py` | filter/redaction、计时关联、summary、压缩/派生文件和安全落盘 |
+| `openbachelor_ios/capture_proxy.py` | 实时 viewer 桥接、错误/吞吐状态和隐私边界 |
+| `openbachelor_ios/runner.py` | CLI 命令、安全 allowlist、全部关闭 |
+| `openbachelor_ios/config.py` / `config.example.json` | 默认值、范围验证和旧配置迁移 |
+| `launcher/*` | Launcher 可见配置与状态传递 |
+| `README.md` | 用户用法、边界、风险和实机步骤 |
+| `tests/*` | profile 生成、配置、命令路由、capability 和恢复回归 |
 | `TODO.md` | 状态、实机证据和剩余风险 |
 
 ## 13. 统一验收清单
 
 ### 13.1 自动化
 
-- [ ] `cd ios && UV_CACHE_DIR=.uv-cache uv run --locked python -m pytest -q`。
-- [ ] `cd ios && UV_CACHE_DIR=.uv-cache uv run --locked ruff check openbachelor_ios tests`。
-- [ ] `cd ios && npm run typecheck`。
-- [ ] `cd ios && npm run build`，确认 Direct bundle 确实包含新增模块。
+- [ ] `UV_CACHE_DIR=.uv-cache uv run --locked python -m pytest -q`。
+- [ ] `UV_CACHE_DIR=.uv-cache uv run --locked ruff check openbachelor_ios tests`。
+- [ ] `npm run typecheck`。
+- [ ] `npm run build`，确认 Direct bundle 确实包含新增模块。
 - [ ] 新增 profile generator 测试：正确 overload、RVA、prologue、layout、缺失符号 warning。
 - [ ] 新增 Agent 行为测试：缺任一依赖时 unavailable，不能退化为未校验地址。
 - [ ] 新增 CLI/overlay 测试：partial/high-risk 标签、`enable all` allowlist、全部关闭。
@@ -623,7 +623,6 @@ profile id / Mach-O UUID：
 - 不实现 Unity/IL2CPP 全堆内存快照式存档。
 - 不安装未逐项校验 prologue 的全局 `Interceptor.replace`。
 - 不因 hook 安装成功就把 partial/unavailable 标记改为 ready。
-- 本阶段不分析或实现 Android。
 
 ## 15. 决策记录
 

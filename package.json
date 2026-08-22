@@ -1,12 +1,20 @@
 {
+  "name": "openbachelor-ios-agent",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20 <26"
+  },
+  "scripts": {
+    "build": "frida-compile -S frida/probe.ts -o build/probe.js && frida-compile -S frida/core.ts -o build/core.js && frida-compile -S frida/direct.ts -o build/direct.js && frida-compile -S frida/extra.ts -o build/extra.js && frida-compile -S frida/trainer.ts -o build/trainer.js",
+    "typecheck": "tsc --noEmit"
+  },
   "devDependencies": {
     "@types/frida-gum": "^19.0.2",
-    "@types/node": "^25.6.0",
-    "frida-compile": "^19.0.5",
-    "frida-il2cpp-bridge": "^0.13.1",
-    "frida-java-bridge": "^7.0.13",
-    "typescript": "^6.0.3",
-    "webpack": "^5.106.2",
-    "webpack-cli": "^7.0.2"
+    "frida": "17.9.1",
+    "frida-compile": "19.0.5",
+    "frida-il2cpp-bridge": "0.13.1",
+    "frida-objc-bridge": "8.0.6",
+    "typescript": "6.0.3"
   }
 }
