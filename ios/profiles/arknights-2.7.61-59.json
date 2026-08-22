@@ -46,7 +46,12 @@
     "bestHttpRequestDumpHeaders": "0x6cad360",
     "bestHttpManagerSendRequest": "0x6ca5004",
     "systemUriCtorString": "0x6970a04",
-    "systemUriGetAbsoluteUri": "0x6972d90"
+    "systemUriGetAbsoluteUri": "0x6972d90",
+    "serverNetMsgSerialize": "0x262bc28",
+    "serverNetMsgTryDeserialize": "0x262bd20",
+    "longServiceNetMsgSerialize": "0x2a26b6c",
+    "longServiceNetMsgTryDeserialize": "0x2a26ca8",
+    "bestHttpResponseAddStreamedFragment": "0x6cb24d0"
   },
   "prologues": {
     "unityWebRequestGet": "f657bda9f44f01a9",
@@ -75,7 +80,12 @@
     "bestHttpRequestDumpHeaders": "ff8301d1f85f02a9",
     "bestHttpManagerSendRequest": "ff8301d1f65703a9",
     "systemUriCtorString": "f44fbea9fd7b01a9",
-    "systemUriGetAbsoluteUri": "f657bda9f44f01a9"
+    "systemUriGetAbsoluteUri": "f657bda9f44f01a9",
+    "serverNetMsgSerialize": "f85fbca9f65701a9",
+    "serverNetMsgTryDeserialize": "fa67bba9f85f01a9",
+    "longServiceNetMsgSerialize": "ff4301d1f85f01a9",
+    "longServiceNetMsgTryDeserialize": "ff8301d1fa6701a9",
+    "bestHttpResponseAddStreamedFragment": "ffc301d1f85f03a9"
   },
   "layout": {
     "stringLength": 16,
@@ -90,7 +100,12 @@
     "bestRequestRawData": 32,
     "bestHttpResponseCode": 24,
     "bestHttpResponseData": 72,
+    "bestHttpResponseBaseRequest": 120,
     "webHttpResponseText": 40,
-    "webHttpResponseData": 48
+    "webHttpResponseData": 48,
+    "byteArrayBuffer": 24,
+    "byteArrayPosition": 32,
+    "byteArraySize": 36,
+    "netMsgId": 16
   }
 }

@@ -24,12 +24,14 @@
     "no_proxy": true,
     "proxy_url": "",
     "capture": false,
+    "capture_har": true,
     "capture_output_dir": "captured",
     "capture_max_body_bytes": 4194304,
     "capture_upstream_proxy": "",
     "capture_bridge_host": "",
     "bypass_ssl": true,
-    "bypass_signatures": true
+    "bypass_signatures": true,
+    "floating_gui": false
   },
   "extra": {
     "pause_deploy": true,

@@ -180,6 +180,31 @@ METHOD_SPECS: tuple[MethodSpec, ...] = (
         "System.Uri$$get_AbsoluteUri",
         "System_Uri_o* __this, const MethodInfo* method",
     ),
+    MethodSpec(
+        "serverNetMsgSerialize",
+        "Torappu.SocketNetwork.ServerBase.ServerNetMsgSerializer$$Serialize",
+        "Torappu_DataStream_ByteArray_o* sendBuffer, Torappu_SocketNetwork_Msg_NetMsg_o* msg, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "serverNetMsgTryDeserialize",
+        "Torappu.SocketNetwork.ServerBase.ServerNetMsgSerializer$$TryDeserialize",
+        "Torappu_DataStream_ByteArray_o* revBuff, int32_t* leftSize, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "longServiceNetMsgSerialize",
+        "Torappu.LongServiceKit.Server.LongServiceNetMsgSerializer$$Serialize",
+        "Torappu_DataStream_ByteArray_o* sendBuff, Torappu_SocketNetwork_Msg_NetMsg_o* msg, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "longServiceNetMsgTryDeserialize",
+        "Torappu.LongServiceKit.Server.LongServiceNetMsgSerializer$$TryDeserialize",
+        "Torappu_DataStream_ByteArray_o* revBuff, int32_t* leftSize, const MethodInfo* method",
+    ),
+    MethodSpec(
+        "bestHttpResponseAddStreamedFragment",
+        "BestHTTP.HTTPResponse$$AddStreamedFragment",
+        "System_Byte_array* buffer, const MethodInfo* method",
+    ),
 )
 
 DEFAULT_LAYOUT: dict[str, int] = {
@@ -195,8 +220,13 @@ DEFAULT_LAYOUT: dict[str, int] = {
     "bestRequestRawData": 32,
     "bestHttpResponseCode": 24,
     "bestHttpResponseData": 72,
+    "bestHttpResponseBaseRequest": 120,
     "webHttpResponseText": 40,
     "webHttpResponseData": 48,
+    "byteArrayBuffer": 24,
+    "byteArrayPosition": 32,
+    "byteArraySize": 36,
+    "netMsgId": 16,
 }
 
 # dump.cs class/field pairs used to derive the managed object layouts.
@@ -209,8 +239,13 @@ LAYOUT_FIELDS: dict[str, tuple[str, str]] = {
     "bestRequestRawData": ("HTTPRequest", "<RawData>k__BackingField"),
     "bestHttpResponseCode": ("HTTPResponse", "<StatusCode>k__BackingField"),
     "bestHttpResponseData": ("HTTPResponse", "<Data>k__BackingField"),
+    "bestHttpResponseBaseRequest": ("HTTPResponse", "baseRequest"),
     "webHttpResponseText": ("WebHttpResponse", "text"),
     "webHttpResponseData": ("WebHttpResponse", "data"),
+    "byteArrayBuffer": ("ByteArray", "m_buffer"),
+    "byteArrayPosition": ("ByteArray", "m_pos"),
+    "byteArraySize": ("ByteArray", "m_size"),
+    "netMsgId": ("NetMsg", "<id>k__BackingField"),
 }
 
 

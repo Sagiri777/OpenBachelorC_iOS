@@ -282,6 +282,34 @@ def test_layout_parser_reports_missing_managed_field(tmp_path):
     assert layout["requestUploadHandler"] >= 0
 
 
+@pytest.mark.skipif(
+    not (Path(__file__).parents[1] / "dumps/2.7.61-59/il2cppdumper/dump.cs").is_file(),
+    reason="golden IL2CPP dump is not checked out",
+)
+def test_layout_parser_resolves_protocol_and_streaming_fields_from_golden_dump():
+    layout, missing = _layout_from_dump(
+        Path(__file__).parents[1] / "dumps/2.7.61-59/il2cppdumper/dump.cs"
+    )
+
+    assert missing == []
+    assert {
+        key: layout[key]
+        for key in (
+            "byteArrayBuffer",
+            "byteArrayPosition",
+            "byteArraySize",
+            "netMsgId",
+            "bestHttpResponseBaseRequest",
+        )
+    } == {
+        "byteArrayBuffer": 0x18,
+        "byteArrayPosition": 0x20,
+        "byteArraySize": 0x24,
+        "netMsgId": 0x10,
+        "bestHttpResponseBaseRequest": 0x78,
+    }
+
+
 def test_missing_layout_fails_by_default_and_explicit_fallback_uses_reference(
     monkeypatch, tmp_path
 ):

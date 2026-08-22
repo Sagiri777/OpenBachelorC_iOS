@@ -1,4 +1,5 @@
 import { ScriptConfig, rewriteUrl } from "./util";
+import { createFloatingOverlay, FloatingOverlay } from "./floating-overlay";
 
 declare const send: any;
 
@@ -26,6 +27,12 @@ interface BodyData {
     data: ArrayBuffer | null;
     size: number;
     truncated: boolean;
+}
+
+interface ByteArrayState {
+    buffer: NativePointer;
+    position: number;
+    size: number;
 }
 
 interface RequestState {
@@ -58,6 +65,7 @@ const conf = new ScriptConfig({
     capture_max_body_bytes: 4 * 1024 * 1024,
     bypass_ssl: true,
     bypass_signatures: true,
+    floating_gui: false,
 });
 
 let profile: DirectProfile;
@@ -72,6 +80,7 @@ let uriGetAbsoluteUri: any = null;
 let bestHttpDumpHeaders: any = null;
 let nextRequestId = 1;
 let installed = false;
+let floatingOverlay: FloatingOverlay | null = null;
 
 const requests = new Map<string, RequestState>();
 const uploadBodies = new Map<string, BodyData>();
@@ -79,10 +88,16 @@ const downloadRequests = new Map<string, RequestState>();
 const asyncRequests = new Map<string, RequestState>();
 const bestHttpRequests = new Map<string, BestHttpRequestState>();
 const bestHttpResponses = new Map<string, BestHttpRequestState>();
+const bestHttpStreamFragments = new Map<string, number>();
 
 function emit(payload: Record<string, any>, data?: ArrayBuffer | null): void {
+    floatingOverlay?.record(payload);
     if (data !== undefined && data !== null) send(payload, data);
     else send(payload);
+}
+
+function reportOverlayAction(action: string, details: Record<string, unknown> = {}): void {
+    emit({ event: "overlay-action", action, ...details });
 }
 
 function parseInteger(value: JsonNumber, name: string): number {
@@ -167,15 +182,37 @@ function tryReadManagedString(value: NativePointer, maximumLength = 1024 * 1024)
     }
 }
 
-function readManagedBytes(value: NativePointer): BodyData {
+function readManagedBytesRange(value: NativePointer, offset: number, size: number): BodyData {
     if (value.isNull()) return { data: null, size: 0, truncated: false };
-    const size = Number(value.add(layout("arrayLength")).readU64().toString());
-    if (!Number.isSafeInteger(size) || size < 0) throw new Error(`invalid managed array length: ${size}`);
+    const arraySize = Number(value.add(layout("arrayLength")).readU64().toString());
+    const end = offset + size;
+    if (!Number.isSafeInteger(arraySize) || arraySize < 0) throw new Error(`invalid managed array length: ${arraySize}`);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(size) || size < 0 || !Number.isSafeInteger(end) || end > arraySize) {
+        throw new Error(`invalid managed byte range: offset=${offset}, size=${size}, array_size=${arraySize}`);
+    }
     const capturedSize = Math.min(size, maxBodyBytes);
     const data = capturedSize === 0
         ? new ArrayBuffer(0)
-        : value.add(layout("arrayData")).readByteArray(capturedSize);
+        : value.add(layout("arrayData") + offset).readByteArray(capturedSize);
     return { data, size, truncated: capturedSize < size };
+}
+
+function readManagedBytes(value: NativePointer): BodyData {
+    if (value.isNull()) return { data: null, size: 0, truncated: false };
+    const size = Number(value.add(layout("arrayLength")).readU64().toString());
+    return readManagedBytesRange(value, 0, size);
+}
+
+function readByteArrayState(value: NativePointer): ByteArrayState {
+    if (value.isNull()) throw new Error("ByteArray is null");
+    const buffer = value.add(layout("byteArrayBuffer")).readPointer();
+    const position = value.add(layout("byteArrayPosition")).readS32();
+    const size = value.add(layout("byteArraySize")).readS32();
+    if (position < 0 || size < 0 || position > size) {
+        throw new Error(`invalid ByteArray state: position=${position}, size=${size}`);
+    }
+    if (buffer.isNull() && size !== 0) throw new Error("ByteArray buffer is null with non-zero size");
+    return { buffer, position, size };
 }
 
 function encodeUtf8(value: string): ArrayBuffer {
@@ -506,7 +543,128 @@ function emitBestHttpResponse(
         source,
     }, body.data);
     bestHttpRequests.delete(state.pointer.toString());
-    if (state.responsePointer) bestHttpResponses.delete(state.responsePointer.toString());
+    if (state.responsePointer) {
+        const responseKey = state.responsePointer.toString();
+        bestHttpResponses.delete(responseKey);
+        bestHttpStreamFragments.delete(responseKey);
+    }
+}
+
+function emitProtocolFrame(
+    byteArray: NativePointer,
+    start: number,
+    msg: NativePointer,
+    protocol: "ServerNet" | "LongService",
+    headerSize: number,
+    phase: "send" | "receive",
+    source: string,
+): void {
+    if (!captureEnabled || msg.isNull()) return;
+    const state = readByteArrayState(byteArray);
+    const frameSize = state.position - start;
+    if (frameSize < headerSize || state.position > state.size) {
+        throw new Error(`invalid ${protocol} frame range: start=${start}, end=${state.position}, size=${state.size}`);
+    }
+    const id = msg.add(layout("netMsgId"));
+    const body = readManagedBytesRange(state.buffer, start, frameSize);
+    emit({
+        event: "capture",
+        phase,
+        direction: phase === "send" ? "outbound" : "inbound",
+        timestamp: new Date().toISOString(),
+        transport: "TorappuSocketNetwork",
+        protocol,
+        protocol_main_id: id.readU32(),
+        protocol_sub_id: protocol === "LongService" ? id.add(8).readU64().toString() : "0",
+        frame_header_size: headerSize,
+        frame_size: frameSize,
+        payload_size: frameSize - headerSize,
+        body_size: body.size,
+        body_truncated: body.truncated,
+        source,
+    }, body.data);
+}
+
+function installProprietaryProtocolHooks(hooks: string[], errors: string[]): void {
+    const requiredOffsets = [
+        "serverNetMsgSerialize",
+        "serverNetMsgTryDeserialize",
+        "longServiceNetMsgSerialize",
+        "longServiceNetMsgTryDeserialize",
+    ];
+    const requiredLayouts = [
+        "byteArrayBuffer",
+        "byteArrayPosition",
+        "byteArraySize",
+        "netMsgId",
+    ];
+    if (!requiredOffsets.every(hasOffset) || !requiredLayouts.every(hasLayout)) {
+        emit({
+            event: "proprietary-protocol-unavailable",
+            missing_offsets: requiredOffsets.filter(name => !hasOffset(name)),
+            missing_layout: requiredLayouts.filter(name => !hasLayout(name)),
+        });
+        return;
+    }
+
+    const attachSerialize = (
+        name: string,
+        protocol: "ServerNet" | "LongService",
+        headerSize: number,
+        source: string,
+    ) => {
+        safeAttach(name, {
+            onEnter(this: InvocationContext & { byteArray?: NativePointer; start?: number; msg?: NativePointer }, args) {
+                if (!captureEnabled) return;
+                try {
+                    this.byteArray = args[1];
+                    this.start = readByteArrayState(args[1]).position;
+                    this.msg = args[2];
+                } catch (error) {
+                    emit({ event: "capture-warning", source, error: String(error) });
+                }
+            },
+            onLeave(this: InvocationContext & { byteArray?: NativePointer; start?: number; msg?: NativePointer }) {
+                if (this.byteArray === undefined || this.start === undefined || this.msg === undefined) return;
+                try {
+                    emitProtocolFrame(this.byteArray, this.start, this.msg, protocol, headerSize, "send", source);
+                } catch (error) {
+                    emit({ event: "capture-warning", source, error: String(error) });
+                }
+            },
+        }, hooks, errors);
+    };
+    const attachDeserialize = (
+        name: string,
+        protocol: "ServerNet" | "LongService",
+        headerSize: number,
+        source: string,
+    ) => {
+        safeAttach(name, {
+            onEnter(this: InvocationContext & { byteArray?: NativePointer; start?: number }, args) {
+                if (!captureEnabled) return;
+                try {
+                    this.byteArray = args[1];
+                    this.start = readByteArrayState(args[1]).position;
+                } catch (error) {
+                    emit({ event: "capture-warning", source, error: String(error) });
+                }
+            },
+            onLeave(this: InvocationContext & { byteArray?: NativePointer; start?: number }, retval) {
+                if (retval.isNull() || this.byteArray === undefined || this.start === undefined) return;
+                try {
+                    emitProtocolFrame(this.byteArray, this.start, retval, protocol, headerSize, "receive", source);
+                } catch (error) {
+                    emit({ event: "capture-warning", source, error: String(error) });
+                }
+            },
+        }, hooks, errors);
+    };
+
+    attachSerialize("serverNetMsgSerialize", "ServerNet", 8, "ServerNetMsgSerializer.Serialize");
+    attachDeserialize("serverNetMsgTryDeserialize", "ServerNet", 8, "ServerNetMsgSerializer.TryDeserialize");
+    attachSerialize("longServiceNetMsgSerialize", "LongService", 16, "LongServiceNetMsgSerializer.Serialize");
+    attachDeserialize("longServiceNetMsgTryDeserialize", "LongService", 16, "LongServiceNetMsgSerializer.TryDeserialize");
 }
 
 function installBestHttpHooks(hooks: string[], errors: string[]): void {
@@ -514,6 +672,7 @@ function installBestHttpHooks(hooks: string[], errors: string[]): void {
         "networkerPostWithBestHttp",
         "networkerGenerateHttpPostRequest",
         "networkerProcessBestHttpResponse",
+        "bestHttpResponseAddStreamedFragment",
         ...(!conf.bool("no_proxy", true) ? ["systemUriCtorString"] : []),
     ];
     const requiredLayouts = [
@@ -522,6 +681,7 @@ function installBestHttpHooks(hooks: string[], errors: string[]): void {
         "bestRequestRawData",
         "bestHttpResponseCode",
         "bestHttpResponseData",
+        "bestHttpResponseBaseRequest",
         "webHttpResponseText",
         "webHttpResponseData",
     ];
@@ -599,6 +759,48 @@ function installBestHttpHooks(hooks: string[], errors: string[]): void {
                 if (rawBody.size > 0) state.body = rawBody;
             } catch (error) {
                 emit({ event: "besthttp-warning", stage: "request-leave", error: String(error) });
+            }
+        },
+    }, hooks, errors);
+
+    safeAttach("bestHttpResponseAddStreamedFragment", {
+        onEnter(args) {
+            if (!captureEnabled) return;
+            try {
+                const response = args[0];
+                if (response.isNull()) return;
+                const request = response.add(layout("bestHttpResponseBaseRequest")).readPointer();
+                if (request.isNull()) return;
+                const state = bestHttpRequestState(request);
+                if (!state.url) state.url = bestHttpRequestUrl(request);
+                if (!state.method || state.method === "UNKNOWN") state.method = bestHttpMethod(request);
+                if (state.body === undefined) state.body = bestHttpRequestBody(request);
+                emitBestHttpRequest(state, "HTTPResponse.AddStreamedFragment");
+                if (state.requestId === undefined) return;
+
+                state.responsePointer = response;
+                const responseKey = response.toString();
+                bestHttpResponses.set(responseKey, state);
+                const fragmentIndex = bestHttpStreamFragments.get(responseKey) ?? 0;
+                bestHttpStreamFragments.set(responseKey, fragmentIndex + 1);
+                const body = readManagedBytes(args[1]);
+                emit({
+                    event: "capture",
+                    phase: "stream",
+                    direction: "inbound",
+                    request_id: state.requestId,
+                    stream_id: `${state.requestId}:response`,
+                    fragment_index: fragmentIndex,
+                    timestamp: new Date().toISOString(),
+                    transport: "BestHTTP",
+                    url: state.url,
+                    response_status: bestHttpResponseStatus(response),
+                    body_size: body.size,
+                    body_truncated: body.truncated,
+                    source: "HTTPResponse.AddStreamedFragment",
+                }, body.data);
+            } catch (error) {
+                emit({ event: "besthttp-warning", stage: "stream-fragment", error: String(error) });
             }
         },
     }, hooks, errors);
@@ -841,6 +1043,7 @@ function installHooks(): void {
         },
     }, hooks, errors);
 
+    installProprietaryProtocolHooks(hooks, errors);
     installBestHttpHooks(hooks, errors);
 
     if (conf.bool("bypass_ssl", true)) {
@@ -866,6 +1069,13 @@ function installHooks(): void {
             url_rewrite: !conf.bool("no_proxy", true),
             ssl_bypass: conf.bool("bypass_ssl", true),
             signature_bypass: conf.bool("bypass_signatures", true),
+            proprietary_protocol_capture: [
+                "serverNetMsgSerialize",
+                "serverNetMsgTryDeserialize",
+                "longServiceNetMsgSerialize",
+                "longServiceNetMsgTryDeserialize",
+            ].every(name => hooks.includes(name)),
+            streaming_capture: hooks.includes("bestHttpResponseAddStreamedFragment"),
             extra: false,
             trainer: false,
         },
@@ -919,10 +1129,25 @@ recv("init", message => {
         for (const [key, value] of Object.entries(message.config || {})) conf.set(key, value);
         captureEnabled = conf.bool("capture", true);
         maxBodyBytes = Math.max(0, Math.min(conf.number("capture_max_body_bytes", maxBodyBytes), 64 * 1024 * 1024));
+        if (conf.bool("floating_gui", false)) {
+            floatingOverlay = createFloatingOverlay({
+                captureEnabled: () => captureEnabled,
+                setCaptureEnabled: enabled => {
+                    captureEnabled = enabled;
+                    reportOverlayAction("capture", { enabled });
+                },
+                reportAction: reportOverlayAction,
+            });
+        }
         waitForUnityFramework();
     } catch (error) {
         emit({ event: "direct-error", error: String(error) });
     }
+});
+
+recv("shutdown", () => {
+    floatingOverlay?.destroy();
+    floatingOverlay = null;
 });
 
 emit({ event: "direct-awaiting-init" });

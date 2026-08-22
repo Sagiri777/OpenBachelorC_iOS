@@ -14,6 +14,7 @@
     "frida": "17.9.1",
     "frida-compile": "19.0.5",
     "frida-il2cpp-bridge": "0.13.1",
+    "frida-objc-bridge": "8.0.6",
     "typescript": "6.0.3"
   }
 }
