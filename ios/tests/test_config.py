@@ -17,6 +17,7 @@ def test_load_example_config():
     assert config.scripts.trainer is False
     assert config.core["no_proxy"] is True
     assert config.direct["capture"] is False
+    assert config.direct["capture_har"] is True
     assert config.direct["capture_upstream_proxy"] == ""
     assert config.direct["capture_bridge_host"] == ""
     assert config.direct["bypass_ssl"] is True
@@ -122,4 +123,15 @@ def test_invalid_capture_proxy_config_is_rejected(tmp_path):
     )
 
     with pytest.raises(ValueError, match="capture_upstream_proxy"):
+        load_config(path)
+
+
+def test_invalid_capture_har_config_is_rejected(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"bundle_id": "example.app", "direct": {"capture_har": "yes"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="capture_har"):
         load_config(path)

@@ -37,6 +37,7 @@ TRAINER_COMMANDS = (
 
 _DIRECT_HOST_KEYS = {
     "capture_bridge_host",
+    "capture_har",
     "capture_output_dir",
     "capture_upstream_proxy",
 }
@@ -115,11 +116,15 @@ def _capture_writer(config: AppConfig) -> CaptureWriter:
     output_dir = Path(config.direct.get("capture_output_dir", "captured")).expanduser()
     if not output_dir.is_absolute():
         output_dir = PROJECT_ROOT / output_dir
-    return CaptureWriter(
+    writer = CaptureWriter(
         output_dir,
         enabled=bool(config.direct.get("capture", False)),
         log=lambda summary: print(f"[direct] {summary}", flush=True),
     )
+    # Set this after construction so integrations that provide a compatible
+    # CaptureWriter wrapper do not need to know about the optional HAR switch.
+    writer.har_enabled = bool(config.direct.get("capture_har", True))
+    return writer
 
 
 def _capture_proxy_bridge(config: AppConfig) -> CaptureProxyBridge | None:

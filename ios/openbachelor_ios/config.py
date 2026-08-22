@@ -170,6 +170,7 @@ def load_config(path: Path) -> AppConfig:
     core = dict(_mapping(raw.get("core", {}), "core"))
     direct = {
         "capture": False,
+        "capture_har": True,
         "capture_upstream_proxy": "",
         "capture_bridge_host": "",
         "bypass_ssl": True,
@@ -177,6 +178,8 @@ def load_config(path: Path) -> AppConfig:
         **core,
         **dict(_mapping(raw.get("direct", {}), "direct")),
     }
+    if not isinstance(direct["capture_har"], bool):
+        raise ValueError("direct.capture_har must be a boolean")
     capture_output_dir = direct.get("capture_output_dir", "captured")
     if not isinstance(capture_output_dir, str) or not capture_output_dir.strip():
         raise ValueError("direct.capture_output_dir must be a non-empty string")
