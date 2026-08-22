@@ -338,3 +338,10 @@ pyrightconfig.json
 /ios/dumps/
 /ios/config.json
 /ios/config.capture-test.json
+/LauncherApp.plist
+/OpenBachelorHelper.plist
+/OpenBachelorInjector.plist
+/ios/launcher/.cache/
+/ios/launcher/dist/
+/ios/launcher/Vendor/
+/ios/launcher/build/

@@ -1,4 +1,4 @@
-.PHONY: install build typecheck test lint doctor
+.PHONY: install build typecheck test lint doctor launcher
 
 install:
 	UV_CACHE_DIR=.uv-cache uv sync --locked --dev
@@ -18,3 +18,6 @@ lint:
 
 doctor:
 	UV_CACHE_DIR=.uv-cache uv run --locked openbachelor-ios doctor
+
+launcher:
+	launcher/build.sh

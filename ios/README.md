@@ -2,12 +2,15 @@
 
 `ios/` 是 OpenBachelorC 的 macOS 宿主端控制器、Frida Agent 和 direct profile
 工具链。宿主程序在 Mac 上运行，通过 USB 或远程 Frida 连接 iPhone；它不是一个可在
-iPhone 上独立运行的 Python App。
+iPhone 上独立运行的 Python App。`launcher/` 另提供一个 TrollStore 原生启动器，可连接
+目标 App 内的 Frida Gadget，或连接越狱环境的本机 `frida-server`；完成一次性准备后，
+每次启动、注入和本机抓包均不需要连接 Mac 或运行宿主控制器。
 
-当前提供两条运行路径：
+当前提供三条运行路径：
 
 - 越狱设备：iPhone 运行 `frida-server`，Mac 对目标应用执行 `attach` 或 `spawn`。
 - TrollStore + Gadget：向已解密 IPA 注入 Frida Gadget，安装后由同一控制器连接。
+- TrollStore 设备端：launcher 在手机本机自动持久注入 Gadget，再唤起并连接目标 App。
 
 工具还可以从已授权设备上的运行进程导出解密后的 `UnityFramework`、其它应用内
 Mach-O 和 `global-metadata.dat`，并结合 Il2CppDumper 产物生成新版本 direct profile。
@@ -21,12 +24,13 @@ Mach-O 和 `global-metadata.dat`，并结合 Il2CppDumper 产物生成新版本 
 |---|---|---|
 | `doctor` | 可用 | 检查 Frida 设备、目标应用、版本/build、PID、宿主 Frida 和 `ldid` |
 | `build` | 可用 | 编译 `probe`、`direct`、`core`、`extra`、`trainer` Agent |
-| `run` + direct profile | 当前推荐 | 按 bundle/version/build 选择 profile，支持 UnityWebRequest、BestHTTP、URL 重写、TLS/签名绕过和按需捕获 |
+| `run` + direct profile | 当前推荐 | 按 bundle/version/build 选择 profile，支持 UnityWebRequest、BestHTTP、游戏自有 TCP 协议、URL 重写、TLS/签名绕过和按需捕获 |
 | `profile decrypt --device` | 可用，已实机验证 | 从运行进程导出明文 `UnityFramework`、其它已加载应用 Mach-O 和 metadata |
 | `profile decrypt SOURCE` | 可用 | 整理并校验已解密 IPA、`.app`、解包目录、flat dump 或单个 Mach-O |
 | `profile generate` | 可用，已实机验证 | 从解密二进制、`script.json` 和 `dump.cs` 生成 fail-closed direct profile |
 | `profile generate --auto-decrypt` | 可用，已实机验证 | 在生成 profile 前自动执行设备导出或本地输入整理 |
 | `patch-ipa` | 可用 | 向已解密 IPA 注入 Frida Gadget，可选修改 ATS 并用 `ldid` 重签 |
+| 设备端 Launcher | 可构建，待实机回归 | 独立 helper + 状态握手；支持纯 TrollStore Gadget 或越狱 Frida，本机抓包落盘/URL 重定向 |
 | `probe` | 可用 | 报告 Darwin/arm64、`UnityFramework` 和 IL2CPP export 状态，不安装业务 hook |
 | `core` / `extra` / `trainer` | 兼容旧路径 | 依赖未裁剪 IL2CPP exports；不能与 direct profile 模式同时使用 |
 | Android Java hook | 不适用 | iOS 不存在 `Java.perform`、OkHttp Java 层或 `android_dlopen_ext` |
@@ -52,7 +56,8 @@ Mach-O 和 `global-metadata.dat`，并结合 Il2CppDumper 产物生成新版本 
 设备端二选一：
 
 - 已越狱 arm64 iPhone，并运行匹配版本的 iOS `frida-server`。
-- 可使用 TrollStore 安装的设备，以及从你自己的设备取得的已解密 IPA。
+- TrollStore 设备，目标 App 包含至少一个可安全修改的未加密 embedded framework/dylib；
+  如果没有，则需通过 TrollFools 兼容包或 `patch-ipa` 处理已解密 IPA。
 
 不要将仓库中的 Android `frida-server` 或 Gadget 用到 iOS。rootless 越狱也应安装与
 越狱环境匹配的 iOS Frida 软件包。
@@ -98,6 +103,7 @@ ios/
 |-- profiles/               # 按版本管理的 direct profile
 |-- dumps/                  # 本地分析输入；不要提交受版权保护的 dump
 |-- captured/               # 可选网络捕获；包含敏感数据
+|-- launcher/               # TrollStore/越狱设备端原生启动器与 IPA 构建脚本
 |-- tests/                  # Python 测试
 |-- config.example.json     # 完整配置示例
 |-- pyproject.toml
@@ -491,7 +497,7 @@ uv run --locked openbachelor-ios profile decrypt \
 生成器采取 fail-closed 策略：
 
 - 要求 `UnityFramework` 是可解析的 arm64/arm64e Mach-O，且没有未处理的 FairPlay 加密。
-- 流式读取大型 `script.json`，按 Il2CppDumper 方法名和完整签名解析 25 个必需 hook。
+- 流式读取大型 `script.json`，按 Il2CppDumper 方法名和完整签名解析 32 个必需 hook。
 - 重载必须唯一，所有 RVA 必须落在可执行 `__text` 内。
 - 保存 Mach-O UUID、SHA-256、文本段范围和每个函数的 8 字节 prologue。
 - 从 `dump.cs` 解析 UnityWebRequest、BestHTTP 和响应对象所需字段布局。
@@ -603,7 +609,11 @@ uv run --locked openbachelor-ios patch-ipa \
 - `--no-sign`：跳过 `ldid`，供后续外部签名流程使用。
 
 用 TrollStore 安装新 IPA 后打开应用。由于 Gadget 配置为 `on_load: wait`，控制器连接前
-应用停在启动阶段是预期行为：
+应用停在启动阶段是预期行为。可以直接使用设备端 launcher：后端选择
+`TrollStore Gadget`，它会在手机本机唤起目标、连接专用的 `127.0.0.1:27043`、加载 direct agent
+并恢复进程，不需要以下 Mac 控制器命令。
+
+若仍需从 Mac 调试：
 
 ```bash
 uv run --locked openbachelor-ios run \
@@ -623,6 +633,64 @@ uv run --locked openbachelor-ios run \
   --mode gadget --attach \
   --remote 127.0.0.1:27042
 ```
+
+## TrollStore 设备端启动器（纯 TrollStore / 越狱双后端）
+
+设备端 launcher 把 Frida Core、direct agent 和 profile 打进 TrollStore IPA，在手机上
+完成目标唤起、attach、脚本加载和会话保持：
+
+```bash
+cd ios
+OPENBACHELOR_DOWNLOAD_PROXY=http://127.0.0.1:20122 launcher/build.sh
+```
+
+若官方 Frida devkit 已解压，可完全离线重建：
+
+```bash
+FRIDA_DEVKIT_DIR=/path/to/frida-core-devkit-17.9.1-ios-arm64 \
+FRIDA_GADGET_ARCHIVE=/path/to/frida-gadget-17.9.1-ios-universal.dylib.xz \
+TROLLFOOLS_SOURCE_DIR=/path/to/TrollFools \
+  launcher/build.sh
+```
+
+产物包括：
+
+- `launcher/dist/OpenBachelorLauncher.tipa`：推荐用 TrollStore 直接安装；
+- `launcher/dist/OpenBachelorLauncher.ipa`：与 TIPA 内容相同；
+- `launcher/dist/OpenBachelorGadget-TrollFools.zip`：可导入 TrollFools 的 Gadget framework，
+  作为自动注入不可用时的兼容入口。
+
+在 launcher 中选择后端：
+
+- `TrollStore Gadget`：无需越狱、`frida-server` 或单独安装 TrollFools。Launcher 会先
+  备份未加密候选 Mach-O，自动复制、签名并插入内置 Gadget。Gadget 使用专用端口
+  `127.0.0.1:27043`，不会与仍在监听 `27042` 的越狱 `frida-server` 冲突；
+- `越狱 Frida`：设备本机运行 `frida-server 17.9.1`，launcher 可 spawn/attach 原始目标。
+
+两个后端均可选择：
+
+- 本机抓包：不改写 URL，捕获写入
+  `/var/mobile/Library/OpenBachelorLauncher/captured/capture.jsonl` 和 `bodies/`；
+- 服务重定向：将目标请求改写到界面中填写的 HTTP(S) 服务。
+
+启动器使用独立、单实例 helper 保持 Frida session；helper 与界面通过带会话 ID 的
+`status.json` 握手。Launcher 内置 Gadget 使用 `on_load: resume`，目标 App 先正常运行，
+helper 再附加并加载脚本；系统拒绝自动切换 App 时，也可在一分钟内从桌面手动打开而不会因
+等待连接触发启动 watchdog。越狱后端优先附加已运行进程，否则由 `frida-server` 执行
+suspended spawn；spawn 失败时回退到系统唤起，并重新枚举真实 PID 后 attach。
+之后不依赖 launcher 继续在前台，也不需要 Mac/USB/`iproxy`。
+direct agent 默认还会在游戏内安装可拖动、可折叠的原生悬浮控制台，用于查看实时事件摘要、
+切换本会话抓包、复制或清空面板内容。可在 Launcher 配置中关闭；清空面板不会删除磁盘日志。
+当前文本日志位于 `session.log`，历史文本日志和逐会话 JSONL 事件保存在同目录的 `logs/`。
+IPA 默认内置当前仓库的 `arknights-2.7.61-59` profile，也可在构建时用
+`OPENBACHELOR_PROFILE=/path/to/profile.json` 替换。profile 不匹配时 direct agent 会
+fail closed，并在状态卡中显示错误。完整说明见 [`launcher/README.md`](launcher/README.md)。
+
+纯 TrollStore 后端不要求越狱。其精简 injector 复用并注明了 TrollFools MIT 注入流程与
+固定提交的设备端工具，只修改 `cryptid == 0` 的 framework/dylib，失败时恢复原始备份；
+目标 App 更新后再次点击即可重新注入。没有安全候选时会拒绝修改，可改用 TrollFools ZIP 或
+已解密 IPA。Dopamine/KFD 未被捆绑或运行。详细步骤见
+[`launcher/README.md`](launcher/README.md)。
 
 ## 配置、代理与网络捕获
 
@@ -645,6 +713,7 @@ uv run --locked openbachelor-ios run \
     "no_proxy": true,
     "proxy_url": "",
     "capture": false,
+    "capture_har": true,
     "capture_output_dir": "captured",
     "capture_max_body_bytes": 4194304,
     "capture_upstream_proxy": "",
@@ -690,6 +759,7 @@ iPhone 中的 `127.0.0.1` 指向 iPhone 自身，不是 Mac。若 OpenBachelor S
 {
   "direct": {
     "capture": true,
+    "capture_har": true,
     "capture_output_dir": "captured",
     "capture_max_body_bytes": 4194304
   }
@@ -701,18 +771,31 @@ iPhone 中的 `127.0.0.1` 指向 iPhone 自身，不是 Mac。若 OpenBachelor S
 ```text
 captured/
 |-- capture.jsonl
+|-- capture.har
 `-- bodies/
     `-- <sha256>.bin
 ```
 
-- JSONL 记录 URL、headers、状态、body 大小、transport、source 和 sidecar 哈希。
+- JSONL 记录 URL、headers、状态、body 大小、transport、source 和 sidecar 哈希；自有协议帧没有 URL。
+- 捕获会在 session 关闭时自动生成 HAR 1.2。标准 HTTP 请求/响应按 `request_id` 合并；HAR
+  可直接导入 Reqable、Fiddler 或其它 HAR 查看器。
+- `TorappuSocketNetwork` 自有协议不能原生表达为 HTTP，HAR 会为每个帧生成
+  `https://torappu.invalid/socket/...` 合成 URL，并在 `_openbachelor` 扩展中保留协议、方向、主/子 ID、帧头和帧大小。
+- BestHTTP 流式分片会聚合到响应内容；原始分片索引、stream ID 和大小保存在
+  `_openbachelor_stream_fragments` 扩展中。若最终响应已捕获，HAR 使用最终响应 body，避免重复拼接。
+- 可读 UTF-8 body 直接写入 HAR `text`；二进制 body 使用 `encoding: "base64"`，缺失 sidecar
+  时保留大小但不伪造内容。
 - body 以 SHA-256 命名，超过 `capture_max_body_bytes` 时会标记截断。
+- `TorappuSocketNetwork` 的 sidecar 是包含帧头的完整明文帧，并记录主/子协议 ID、方向和帧头大小。
+- BestHTTP 流式响应以 `phase=stream` 逐分片记录，`fragment_index` 从 `0` 开始；完成态响应仍会单独记录。
 - 终端摘要会移除 URL 用户信息、query、fragment、headers 和 body 内容。
 - 捕获目录权限收紧为 `0700`，JSONL 和 body 文件为 `0600`。
+- HAR 文件权限为 `0600`；如只需 JSONL/sidecar，可设置 `direct.capture_har` 为 `false`。
 - 磁盘文件仍包含原始敏感 headers 和 body；完成分析后应按数据保留策略清理。
 
-记录中的 `transport` 可区分 `UnityWebRequest` 与 `BestHTTP`。BestHTTP 记录还包含
-`source`，用于判断请求在何处建立或响应在何处整理。
+记录中的 `transport` 可区分 `UnityWebRequest`、`BestHTTP` 与
+`TorappuSocketNetwork`。BestHTTP 记录还包含 `source`，用于判断请求在何处建立、响应在
+何处整理，或流式分片在何处进入消费队列。
 
 ### 在 Requable / Fiddler 中实时查看
 
@@ -807,7 +890,7 @@ rg 'account/syncData|"transport":"BestHTTP"' captured/capture.jsonl
 | `no direct profile matches` | 为当前 version/build 生成 profile，或仅用 `--probe-only` 检查；不要盲用旧 profile |
 | `direct-profile-mismatch` | 运行中模块 UUID 与 profile 不同；立即停止使用该 profile 并重新生成 |
 | `prologue mismatch` 或 `hook_errors` 非空 | 二进制、Il2CppDumper 产物或 profile 不一致；停止 hook，重新核对全部输入 |
-| Gadget 应用启动后停住 | `on_load: wait` 是预期行为；连接 `--mode gadget --attach`，必要时配合 `iproxy` |
+| `patch-ipa` 产物启动后停住 | `patch-ipa` 的 `on_load: wait` 是预期行为；从 Mac 使用 `--mode gadget --attach`，或改用内置 `on_load: resume` 的设备端 launcher 注入 |
 | `ldid is required` | 安装 `ldid`，或仅在已有外部签名流程时传 `--no-sign` |
 | npm 尝试不兼容构建或安装失败 | 使用 Node.js 20/22，删除错误 Node 环境生成的依赖后重新执行 `npm ci` |
 
@@ -850,7 +933,7 @@ uv run --locked openbachelor-ios patch-ipa --help
 | Mach-O 状态 | 6 个模块均可解析且 `encrypted=False`，无导出 warning |
 | UnityFramework | UUID `AE59EB96-04B9-3FA5-BB0F-51353713ABA3`，SHA-256 `91e5b85a3b5abf77e451ef0a2b9c1cd2e6d5987f922332f06b1b4f0d47a760e7` |
 | Metadata | 43,432,180 字节，version 29，SHA-256 `041d4a22847d0a467b45d408ef66324cbe98423190837558ede82fea9c438376` |
-| Profile | 自动识别 bundle/version/build，生成 `25/25` hooks |
+| Profile | 自动识别 bundle/version/build，生成 `32/32` hooks |
 | 自动化检查 | `68 passed`，Ruff、TypeScript typecheck 和 Frida 导出 Agent 语法检查通过 |
 
 这组结果证明上述版本和环境的路径可重复工作，不代表新游戏版本可以复用旧偏移。每次更新
